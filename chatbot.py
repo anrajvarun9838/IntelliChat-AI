@@ -105,7 +105,7 @@ class Runtime:
         db.lock_down_checkpoint_tables()
 
 
-@st.cache_resource(show_spinner="Starting IntelliChat AI…")
+@st.cache_resource(show_spinner=False)
 def get_runtime() -> Runtime:
     """Create the runtime once per server process (call from the Streamlit script thread)."""
     runtime = Runtime()
@@ -299,5 +299,3 @@ def delete_threads(thread_ids: list[str]) -> None:
             logger.warning("Could not delete checkpoints for a thread", exc_info=True)
 
 
-def graph_mermaid() -> str:
-    return get_runtime().graph.get_graph().draw_mermaid()

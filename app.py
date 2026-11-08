@@ -1,6 +1,7 @@
 """IntelliChat AI - main chat page (Streamlit entry point: `streamlit run app.py`)."""
+import html
 import logging
-
+import re
 import streamlit as st
 from langgraph.types import Command
 
@@ -10,7 +11,7 @@ import rag
 from auth import init_page, logout
 from config import DOC_EXTENSIONS, IMAGE_EXTENSIONS, MODES, settings
 from utils import (
-    export_pdf, export_txt, file_extension, format_timestamp, friendly_error, group_by_date,
+    export_pdf, export_txt, file_extension, friendly_error, group_by_date,
     prepare_image, shorten,
 )
 
@@ -25,14 +26,73 @@ tz = prefs.get("timezone", "UTC")
 ss.setdefault("conv_id", None)        # None = a new chat that has not been saved yet
 ss.setdefault("new_mode", "general")  # mode used for the next new chat
 ss.setdefault("mode_rev", 0)          # bumped when the mode is changed by code, to refresh the selectbox
+ss.setdefault("generating", False)    # True while an answer is being generated (input is locked)
 
-EXAMPLES = {
-    "general": ["Explain how vaccines train the immune system", "Plan a 3-day study schedule for exams"],
-    "coding": ["Write a Python function to merge overlapping intervals", "Explain async/await with an example"],
-    "study": ["Teach me how gradient descent works", "Quiz me on the French Revolution"],
-    "agent": ["What is 18% of 2,450 plus 12 squared?", "What's the weather in Lucknow and the USD to INR rate?"],
-    "document": ["Summarise the main points of my document", "What does the document say about deadlines?"],
+
+def stop_generation() -> None:
+    """Called when Stop is clicked: unlock the input and drop the waiting message."""
+    ss.generating = False
+    ss.pop("queued", None)
+
+
+CHAT_CSS = """
+<style>
+/* no avatars / icons */
+[data-testid="stChatMessageAvatarUser"], [data-testid="stChatMessageAvatarAssistant"],
+[data-testid="stChatMessageAvatarCustom"] { display: none !important; }
+[data-testid="stChatMessage"] { background: transparent; padding: .3rem 0; gap: 0; }
+
+/* user message: plain text pinned to the far right (no chat_message wrapper) */
+.user-row { display: flex; justify-content: flex-end; width: 100%; margin: .5rem 0; }
+.user-text { max-width: 75%; text-align: left; line-height: 1.6; word-break: break-word; }
+
+/* assistant message: left side, full width, no bubble */
+[data-testid="stChatMessage"] [data-testid="stChatMessageContent"] {
+    max-width: 100%; padding: .2rem 0;
 }
+
+/* nicer markdown */
+[data-testid="stChatMessageContent"] p { line-height: 1.7; margin-bottom: .7rem; }
+[data-testid="stChatMessageContent"] h1, [data-testid="stChatMessageContent"] h2,
+[data-testid="stChatMessageContent"] h3 { margin: 1rem 0 .5rem 0; letter-spacing: -.01em; }
+[data-testid="stChatMessageContent"] ul, [data-testid="stChatMessageContent"] ol { padding-left: 1.4rem; margin-bottom: .7rem; }
+[data-testid="stChatMessageContent"] li { margin-bottom: .25rem; }
+[data-testid="stChatMessageContent"] pre { border-radius: 12px; }
+[data-testid="stChatMessageContent"] code { border-radius: 6px; }
+[data-testid="stChatMessageContent"] table { border-collapse: collapse; width: 100%; margin: .6rem 0; }
+[data-testid="stChatMessageContent"] th, [data-testid="stChatMessageContent"] td {
+    border: 1px solid rgba(128,128,128,.3); padding: .45rem .7rem; }
+[data-testid="stChatMessageContent"] th { background: rgba(128,128,128,.12); }
+[data-testid="stChatMessageContent"] blockquote {
+    border-left: 3px solid #6366f1; margin: .6rem 0; padding: .1rem .9rem; opacity: .9; }
+</style>
+"""
+st.markdown(CHAT_CSS, unsafe_allow_html=True)
+
+def cited_sources(content: str, sources: list[dict]) -> list[dict]:
+    """Keep only the sources the answer actually cites, like [1] or [2][3] or [1, 3]."""
+    numbers = {int(n) for group in re.findall(r"\[([\d,\s]+)\]", content)
+               for n in re.findall(r"\d+", group)}
+    return [s for s in sources if s["n"] in numbers]
+
+def render_user(text: str) -> None:
+    """Show the user's message as plain text on the right (HTML-escaped, so it is safe)."""
+    safe = html.escape(text).replace("\n", "<br>")
+    st.markdown(f'<div class="user-row"><div class="user-text">{safe}</div></div>', unsafe_allow_html=True)
+
+
+WELCOME_HTML = """
+<style>
+.welcome { display: flex; align-items: center; justify-content: center;
+           min-height: 55vh; text-align: center; padding: 0 1rem; }
+.welcome-text {
+    font-size: clamp(1.9rem, 5vw, 3.2rem); font-weight: 800; letter-spacing: -.02em; line-height: 1.2;
+    background: linear-gradient(90deg, #6366f1, #ec4899);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+</style>
+<div class="welcome"><div class="welcome-text">How can I help you today?</div></div>
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +157,8 @@ def run_turn(conversation: dict, mode: str, graph_input, config: dict) -> None:
     job = chatbot.start_turn(graph_input, config)
     with st.chat_message("assistant"):
         stop_slot = st.empty()
-        stop_slot.button("Stop generating", icon=":material/stop_circle:", key="stop_btn")  # a click reruns & stops
+        stop_slot.button("Stop generating", icon=":material/stop_circle:", key="stop_btn",
+                         on_click=stop_generation)  # a click reruns, stops and unlocks the input
         status = st.empty()
         status.caption("Thinking…")
         collected: list[str] = []
@@ -191,9 +252,11 @@ if ss.conv_id and conversation is None:  # deleted elsewhere
     ss.conv_id = None
 messages = db.list_messages(uid, conversation["id"]) if conversation else []
 current_mode = conversation["mode"] if conversation else ss.new_mode
+if current_mode not in MODES:
+    current_mode = "general"  # chats saved earlier with a mode that no longer exists
 
 # ---------------------------------------------------------------------------
-# Header: mode + model info
+# Header: mode
 # ---------------------------------------------------------------------------
 head = st.columns([5, 1])
 mode_keys = list(MODES)
@@ -207,7 +270,6 @@ if selected_mode != current_mode:
         ss.new_mode = selected_mode
     current_mode = selected_mode
 mode = current_mode
-
 
 doc_ids: list[str] = []
 if mode == "document":
@@ -238,43 +300,34 @@ if pending_approval and (not conversation or pending_approval["conversation_id"]
 # ---------------------------------------------------------------------------
 # Message history
 # ---------------------------------------------------------------------------
+welcome = st.empty()  # placeholder, so the message can vanish the moment a chat starts
 if not messages:
-    st.markdown("## How can I help you today?")
-    st.caption(f"Current mode: **{MODES[mode]}**. Pick another mode above, or just start typing.")
-    cols = st.columns(2)
-    for i, example in enumerate(EXAMPLES[mode]):
-        if cols[i % 2].button(example, key=f"ex_{i}", use_container_width=True):
-            ss.pending_prompt = example
-            st.rerun()
+    welcome.markdown(WELCOME_HTML, unsafe_allow_html=True)
 
 last_assistant_id = max((m["id"] for m in messages if m["role"] == "assistant"), default=None)
 for m in messages:
-    with st.chat_message(m["role"]):
+    if m["role"] == "user":
+        render_user(m["content"])
+        continue
+    with st.chat_message("assistant"):
         st.markdown(m["content"])
-        meta = [format_timestamp(m["created_at"], tz)]
-        if m["role"] == "assistant":
-            if m.get("tokens_out"):
-                meta.append(f"{(m.get('tokens_in') or 0) + m['tokens_out']:,} tokens")
-            if m.get("latency_ms"):
-                meta.append(f"{m['latency_ms'] / 1000:.1f} s")
-        st.caption(" · ".join(meta))
-        if m["role"] != "assistant":
-            continue
         if m.get("tools_used"):
-            st.caption("🛠 Tools used: " + ", ".join(m["tools_used"]))
-        if m.get("sources"):
-            with st.expander(f"Sources ({len(m['sources'])})"):
-                for s in m["sources"]:
+            st.caption("🛠 " + ", ".join(m["tools_used"]))
+        shown_sources = cited_sources(m["content"], m.get("sources") or [])
+        if shown_sources:
+            with st.expander(f"Sources ({len(shown_sources)})"):
+                for s in shown_sources:
                     page = f", page {s['page']}" if s.get("page") else ""
-                    st.markdown(f"**[{s['n']}]** {s['filename']}{page} · similarity {s['similarity']}")
-        actions = st.columns([2, 2, 6])
-        with actions[0].popover("Copy / download", icon=":material/content_copy:"):
-            st.code(m["content"], language="markdown", wrap_lines=True)  # hover the code box to copy
+                    st.markdown(f"**[{s['n']}]** {s['filename']}{page}")
+        actions = st.columns([1, 1, 14])
+        with actions[0].popover(" ", icon=":material/content_copy:", help="Copy"):
+            st.code(m["content"], language="markdown", wrap_lines=True)  # click the copy icon on the code box
             st.download_button("Download .md", m["content"], file_name=f"response-{m['id']}.md",
                                mime="text/markdown", key=f"dl_{m['id']}")
-        if m["id"] == last_assistant_id and not pending_approval:
-            if actions[1].button("Regenerate", icon=":material/refresh:", key=f"regen_{m['id']}"):
+        if m["id"] == last_assistant_id and not pending_approval and not ss.generating:
+            if actions[1].button(" ", icon=":material/refresh:", help="Regenerate", key=f"regen_{m['id']}"):
                 ss.regenerate = True
+                ss.generating = True
                 st.rerun()
 
 if conversation and messages:
@@ -301,24 +354,38 @@ if pending_approval:
         approve_col, deny_col, _ = st.columns([1, 1, 4])
         if approve_col.button("Approve", type="primary", key="approve_btn"):
             ss.approval_decision = True
+            ss.generating = True
             st.rerun()
         if deny_col.button("Deny", key="deny_btn"):
             ss.approval_decision = False
+            ss.generating = True
             st.rerun()
 
 # ---------------------------------------------------------------------------
 # Input handling
 # ---------------------------------------------------------------------------
+generating = ss.generating
 submitted = st.chat_input(
-    "Message IntelliChat AI…  (📎 to attach PDF, TXT, DOCX or images)",
+    "Ask IntelliChat AI… ",
     accept_file="multiple", file_type=list(DOC_EXTENSIONS + IMAGE_EXTENSIONS),
-    disabled=bool(pending_approval))
+    disabled=bool(pending_approval) or generating)  # locked while an answer is being generated
+
+if submitted and not generating:
+    # remember the message and rerun, so the next run shows the input locked
+    ss.queued = {"text": (submitted.text or "").strip(), "files": list(submitted.files or [])}
+    ss.generating = True
+    st.rerun()
 
 text, files = "", []
-if submitted:
-    text, files = (submitted.text or "").strip(), list(submitted.files or [])
+if generating:
+    queued = ss.pop("queued", None)
+    if queued:
+        text, files = queued["text"], queued["files"]
 elif ss.get("pending_prompt"):
     text = ss.pop("pending_prompt")
+
+if text or files:
+    welcome.empty()  # hide the welcome message as soon as a message is sent
 
 try:
     if ss.get("approval_decision") is not None and conversation:
@@ -353,8 +420,7 @@ try:
             images = [prepare_image(f.getvalue()) for f in image_files]
             shown = text + "".join(f"\n\n📎 *Image: {f.name}*" for f in image_files)
             db.add_message(uid, conversation["id"], "user", shown or text, mode=mode)
-            with st.chat_message("user"):
-                st.markdown(shown)
+            render_user(shown)
             human = chatbot.build_human_message(text, images)
             run_turn(conversation, mode, {"messages": [human]}, make_config(conversation, mode, doc_ids))
         else:
@@ -364,3 +430,5 @@ except PermissionError:
 except Exception as exc:  # noqa: BLE001 - any failure is shown, never silently ignored
     logger.exception("Turn failed")
     st.error(friendly_error(exc))
+finally:
+    ss.generating = False  # unlock after the answer finishes, fails, or is stopped

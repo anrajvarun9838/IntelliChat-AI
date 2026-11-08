@@ -10,6 +10,13 @@ from graph import GRAPH_EXPLANATION
 from utils import export_backup_json
 
 user = init_page("Settings · IntelliChat AI")
+
+with st.sidebar:
+    st.title("💬 IntelliChat AI")
+    st.page_link("app.py", label="Chat", icon=":material/chat:")
+    st.page_link("pages/1_Knowledge_Base.py", label="Knowledge Base", icon=":material/library_books:")
+    st.page_link("pages/2_Settings.py", label="Settings", icon=":material/settings:")
+
 uid = user["id"]
 prefs = st.session_state["prefs"]
 
@@ -109,13 +116,6 @@ if usage["tools"]:
 st.caption("Token counts appear when Gemini reports them. Detailed traces are available if you set LANGSMITH_API_KEY "
            "(note: LangSmith then receives your prompts and answers).")
 
-# --------------------------------------------------------------------------
-# Workflow view
-# --------------------------------------------------------------------------
-with st.expander("How the LangGraph workflow works"):
-    st.markdown(GRAPH_EXPLANATION)
-    st.caption("Graph definition (Mermaid — paste into https://mermaid.live to see the diagram):")
-    st.code(chatbot.graph_mermaid(), language="text")
 
 st.divider()
 if st.button("Log out"):

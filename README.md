@@ -1,67 +1,87 @@
 # IntelliChat AI
 
-A ChatGPT-style Streamlit chatbot with document Q&A (RAG), agent tools, conversation memory and a LangGraph workflow.
-Gemini is the AI provider; Supabase provides PostgreSQL, pgvector, Storage and Auth. The same setup is used locally and on Streamlit Community Cloud.
+A ChatGPT-style chatbot built with **Streamlit, LangChain, LangGraph and Google Gemini**, backed by **Supabase** (PostgreSQL, pgvector, Storage and Auth). You can chat normally, ask questions about your own PDF/TXT/DOCX documents (RAG), and let the AI use tools such as a calculator, web search, weather and currency conversion. Conversations, documents and memory are stored per user and survive restarts.
 
-## Honest status (please read)
-
-The code was written and checked **without internet access or any API credentials**. What was verified:
-
-- All files compile (syntax check) and a static check found no unused imports or undefined names.
-- 25 pure-Python tests pass (calculator safety, error messages, retries, file helpers, date grouping, exports).
-
-What was **not** run, and may need small fixes on your machine:
-
-- Anything needing Streamlit, LangChain, LangGraph, Supabase or Gemini (they could not be installed offline). The tests for the graph, approval flow and RAG helpers are written but were never executed. Run `python -m pytest -q` first; a failure there points at the exact problem.
-- Live Gemini calls, Supabase Auth/Storage/pgvector, the optional tools (Wikipedia, weather, currency, web search), image understanding, and Streamlit Cloud deployment.
-
-Use the manual checklist at the end after setup.
+The same architecture runs locally on Windows and on Streamlit Community Cloud.
 
 ## Features
 
-Implemented: ChatGPT-like UI (sidebar history grouped by date, search, rename, delete, clear, new chat), streaming answers, Stop and Regenerate, copy/download per answer, TXT/PDF export, JSON backup, five modes (General, Document, AI Agent, Coding, Study), PDF/TXT/DOCX upload with pgvector search and citations (file and page), duplicate detection by checksum, Supabase Auth login, per-conversation memory (LangGraph thread + PostgreSQL checkpoints), automatic summarisation of long chats, saved long-term memory (view/delete), tools (calculator, date/time, web search, Wikipedia, weather, currency, save-memory with approval), human approval step, image upload and questions, usage and latency tracking, optional LangSmith.
+- **Two chat modes**
+  - **General Chat**: everyday questions, coding help and study help. The model decides from your message whether to answer directly, write code, teach step by step, or call a tool.
+  - **Document Chat**: answers from your uploaded documents, with citations (file name and page). The same question can also use tools, for example a document fact plus today's date.
+- **Streaming answers** with Markdown and code blocks, a **Stop** button, **Regenerate**, and copy/download for each answer. The input box is locked while an answer is being generated.
+- **Chat history** in the sidebar (grouped by date, searchable, rename, delete, clear) and export to TXT/PDF.
+- **Memory**: per-conversation memory through LangGraph PostgreSQL checkpoints, automatic summarising of long chats, and long-term facts you choose to save (view and delete them in Settings).
+- **Documents**: PDF, TXT and DOCX upload from the chat box or the Knowledge Base page, duplicate detection by checksum, parallel processing, vectors in pgvector, originals in Supabase Storage.
+- **Tools**: calculator, date and time, web search, Wikipedia, weather, currency, and save-to-memory (which asks for your approval first).
+- **Images**: attach an image and ask about it.
+- **Accounts**: email and password login through Supabase Auth; every query is filtered by the logged-in user.
+- **Settings**: response length, temperature, max tokens, reply language, time zone, custom instructions, retrieval top-k, saved memory, JSON backup, usage and response-time statistics.
+- **Optional** LangSmith tracing (off unless you set a key).
 
-Not implemented / limitations:
+## How the whole project works
 
-- **Image generation** is not implemented (not verified, so no fake control).
-- **Theme**: Streamlit's own theme switcher is used (menu ⋮ → Settings → Theme) because apps cannot reliably change it themselves.
-- **Login survives only while the browser tab session lives**; a full page reload asks you to log in again. No password reset UI (use Supabase dashboard).
-- Scanned PDFs (no text layer) are rejected; OCR is not included. PDF export of chats only renders Latin text (use TXT for other scripts).
-- The embedding size (768) is fixed in `sql/schema.sql` and `config.py`; changing it needs a schema change.
-- Gemini model IDs: `gemini-3.8-flash` was confirmed in third-party sources as free-tier eligible (Nov 2026); `gemini-embedding-001` is documented by LangChain. I could not read Google's own page, so confirm both in Google AI Studio. Extra models are not hard-coded; add them with `CHAT_MODEL_OPTIONS` after checking their IDs.
+### 1.LangGraph workflow
+https://mermaid.live/edit#pako:eNpVUttO20AQ_ZXRPrVSQuM4SbFVgaIGlQdAKMlT6wot9iS2uhd3dh0Icf694zUBKu3DzNk5Z64HkdsCRSo2yj7lpSQP60VGmYHVp1-ZWK3ny3Umfn-G4fAC7hmpCWtJ-O2RvlwQOvRQIw19QwY2FarCcXTg3wfK8pAJzRkuM3EM8LKD28LmjUbjW1iuWZTQU4W7XhX1Ixbwt0HnK2sG4FBSXkK93WHuLZ30e6EtGiSpWpizjGTPB40fqCtTwVPlS_DWqreqlutAs3-Y8RFAIkstXLNKKU2h8CEgJ9o8NLN4bUaBbXzd-FNPi3cJ4Ie69nvW-vC3qYxUII17Qs5ywzrKmi34klAWl__rdPVCLhU31c0mlB-aWrN1x-kHQI1xIcRBZYD3wSaqU7G9jJM7fNCoLe0fNjLnUc-7_cm6JruTKijWsnHoYMNFzwOOXf0LNPu3xsMa256FBZf0ES7QVB3YjzJM8tW-Cf97dC2sbjmta7SWVL30K7aqQAKNzvHKHDxibjWChD7qLXkvYmwLV90xXt0tulPsr_M2JLsKzvW7LQZiS1UhUk8NDoRG0rJzxYHjgKdZosZMpNAdXdE8D3OrujVn5sjUWpqf1uoTm2yzLUW6kcqx19SF9Lio5JbkewgabuW7bYwXaTQ6j4KISA_iWaRxNDqbjMZfp0kSx6NkHA_EXqTT5Gw6mUySZBLPklkcxbPjQLyEtNFZNB4n53GSTJPJeTSZzo7_AH45MjU
 
 ## Project structure
 
 ```
-app.py                  main chat page (entry point)
-pages/1_Knowledge_Base.py   upload/manage documents
-pages/2_Settings.py     preferences, memory, backup, usage, workflow view
-config.py  utils.py     settings/model IDs; pure helpers
-database.py             PostgreSQL access (pool, all queries filtered by user_id)
-chatbot.py              Gemini clients, background event loop, streaming jobs
-graph.py                LangGraph workflow
-rag.py  tools.py        ingestion/retrieval; agent tools
-auth.py                 Supabase Auth + page bootstrap
-sql/schema.sql          tables, indexes, pgvector, RLS, storage bucket
-tests/test_core.py
+app.py                      main chat page (entry point)
+pages/1_Knowledge_Base.py   upload and manage documents
+pages/2_Settings.py         preferences, memory, backup, usage
+config.py                   settings, model IDs, modes
+utils.py                    pure helpers (errors, retries, calculator, exports)
+database.py                 PostgreSQL access (pool, user-scoped queries)
+chatbot.py                  Gemini clients, background loop, streaming jobs
+graph.py                    LangGraph workflow
+rag.py                      ingestion and retrieval
+tools.py                    agent tools
+auth.py                     Supabase Auth and page bootstrap
+sql/schema.sql              tables, indexes, pgvector, RLS, storage bucket
+tests/test_core.py          automated tests (no API calls)
 ```
 
-## 1. Supabase setup
+## Tools
 
-1. Create a project at https://supabase.com (free plan is fine). Save the database password.
-2. **pgvector / schema**: open *SQL Editor*, paste all of `sql/schema.sql`, click *Run*. It enables the `vector` extension, creates the tables, indexes, Row Level Security policies and a private `documents` Storage bucket. (The app also runs it automatically on first start if tables are missing; running it yourself first gives clearer errors.)
-3. **Keys**: *Project Settings → API*: copy the Project URL, the `anon` key and the `service_role` key.
-4. **Database URL**: click *Connect* and copy the **Session pooler** string (port 5432). Use it as `DATABASE_URL`. The direct connection is IPv6-only on the free plan and often fails on Streamlit Cloud.
-5. **Auth**: *Authentication → Providers → Email* is on by default. For quick testing you may turn off "Confirm email"; otherwise new users must click the email link before logging in.
-6. **Storage**: the `documents` bucket is created by the schema (private, 20 MB limit). Files are saved as `<user_id>/<doc_id>/<name>`.
+| Tool | What it does | Needs a key |
+|---|---|---|
+| `calculator` | safe arithmetic (no `eval`) | no |
+| `current_datetime` | date and time in any time zone | no |
+| `web_search` | web results | optional `TAVILY_API_KEY`, otherwise key-less DuckDuckGo |
+| `wikipedia_search` | article introduction | no |
+| `get_weather` | current weather and 3-day forecast | no |
+| `convert_currency` | exchange-rate conversion | no |
+| `save_memory_fact` | saves a fact to long-term memory, **only after you approve** | no |
 
-Security model: the app connects as the database owner (bypasses RLS) and adds `user_id = <logged-in user>` to every query. RLS policies on all tables (and RLS with no policies on LangGraph's checkpoint tables) additionally block access through Supabase's public API. The service-role key is only used on the server for Storage; never put it in front-end code or GitHub.
+## Database
 
-## 2. Gemini API key
+| Table | Purpose |
+|---|---|
+| `conversations` | chats, mode, LangGraph thread id |
+| `messages` | what you see in the chat (with sources, tools, tokens, response time) |
+| `documents` | uploaded files (checksum, storage path, scope) |
+| `document_chunks` | text chunks and 768-dimension vectors (HNSW index) |
+| `user_preferences`, `user_memories`, `user_profiles` | settings, saved facts, profile |
+| `checkpoints*` | LangGraph state, created automatically |
 
-Create a key at https://aistudio.google.com/apikey. Free-tier limits are per project and change; the app retries temporary errors with backoff and shows clear messages for invalid keys, exhausted quota and unavailable models.
+Chat history (what you see) and LangGraph checkpoints (what the model remembers) are separate on purpose. The app connects as the database owner and adds `user_id` to every query; Row Level Security policies protect the same tables if someone reaches them through Supabase's public API.
 
-## 3. Run locally (Windows)
+## Setup
+
+### 1. Supabase
+
+1. Create a project at https://supabase.com.
+2. Open **SQL Editor**, paste all of `sql/schema.sql` and run it (the app also runs it on first start if the tables are missing).
+3. **Project Settings → API**: copy the project URL, the `anon` key and the `service_role` key.
+4. **Connect → Session pooler**: copy that connection string (port 5432) as `DATABASE_URL`. The direct connection is IPv6-only on the free plan and often fails.
+5. **Authentication → Providers → Email**: for local testing you may turn off "Confirm email"; otherwise new users must click the link in the confirmation email first.
+
+### 2. Gemini API key
+
+Create a key at https://aistudio.google.com/apikey.
+
+### 3. Run locally (Windows)
 
 ```bat
 cd intellchat-ai
@@ -74,34 +94,29 @@ python -m pytest -q
 streamlit run app.py
 ```
 
-Fill every non-optional value in `.env`. Open http://localhost:8501, sign up, and start chatting.
+Open http://localhost:8501, sign up, and start chatting. Stop the app with `Ctrl+C` and restart it after code changes.
 
 ### Environment variables
 
 | Name | Required | Purpose |
 |---|---|---|
-| GEMINI_API_KEY | yes | Gemini key |
-| DATABASE_URL | yes | Supabase Session pooler connection string |
-| SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_SERVICE_KEY | yes | Auth and Storage |
-| CHAT_MODEL, EMBEDDING_MODEL | no | Defaults `gemini-3.8-flash`, `gemini-embedding-001` |
-| CHAT_MODEL_OPTIONS | no | Extra model IDs for the Settings selector |
-| TAVILY_API_KEY | no | Better web search; otherwise key-less DuckDuckGo via `ddgs` |
-| LANGSMITH_API_KEY | no | Enables LangSmith tracing (it receives prompts and answers) |
-| MIN_SIMILARITY | no | Retrieval cut-off (default 0.40); raise if unrelated text is cited, lower if nothing is found |
+| `GEMINI_API_KEY` | yes | Gemini key |
+| `DATABASE_URL` | yes | Supabase Session pooler connection string |
+| `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_KEY` | yes | Auth and Storage |
+| `CHAT_MODEL`, `EMBEDDING_MODEL` | no | defaults `gemini-3.8-flash`, `gemini-embedding-001` (confirm availability in Google AI Studio) |
+| `CHAT_MODEL_OPTIONS` | no | extra model IDs for the Settings selector |
+| `TAVILY_API_KEY` | no | better web search |
+| `LANGSMITH_API_KEY` | no | tracing (LangSmith then receives prompts and answers) |
+| `MIN_SIMILARITY` | no | retrieval cut-off, default 0.40 |
+| `DB_POOL_SIZE` | no | database connections, default 5 |
 
-## 4. Deploy to Streamlit Community Cloud
+Never commit `.env` or any key to GitHub (`.gitignore` already excludes it).
 
-1. Push to GitHub (never commit `.env`; `.gitignore` already excludes it):
-   ```bat
-   git init
-   git add .
-   git commit -m "IntelliChat AI"
-   git branch -M main
-   git remote add origin https://github.com/YOUR_NAME/intellchat-ai.git
-   git push -u origin main
-   ```
-2. At https://share.streamlit.io choose *New app*, pick the repo, branch `main`, main file `app.py`.
-3. *Advanced settings → Secrets*: paste the same values as TOML, with quotes:
+## Deploy to Streamlit Community Cloud
+
+1. Push the project to GitHub.
+2. On https://share.streamlit.io choose **New app**, pick the repository, branch `main`, main file `app.py`.
+3. In **Advanced settings → Secrets**, paste the same values as TOML with quotes:
    ```toml
    GEMINI_API_KEY = "..."
    DATABASE_URL = "postgresql://postgres.xxxx:PASSWORD@aws-0-REGION.pooler.supabase.com:5432/postgres"
@@ -109,37 +124,37 @@ Fill every non-optional value in `.env`. Open http://localhost:8501, sign up, an
    SUPABASE_ANON_KEY = "..."
    SUPABASE_SERVICE_KEY = "..."
    ```
-4. Deploy. In Supabase *Authentication → URL Configuration*, set the Site URL to your app URL (used in confirmation emails).
+4. Deploy, then set the Site URL under Supabase **Authentication → URL Configuration**.
 
-### Troubleshooting
+## Troubleshooting
 
-- **Setup screen listing names**: those secrets are missing.
-- **"Could not reach the database"**: use the Session pooler URL, check the password (URL-encode special characters), and that the project is not paused.
-- **Windows event-loop errors**: the app already uses a selector loop for psycopg; make sure you did not set another loop policy.
-- **429 / quota**: wait, or check your free-tier quota. `limit: 0` means the model has no free quota for your project.
-- **Nothing found in Document Chat**: lower `MIN_SIMILARITY`, or select the document in the "Search in" box.
-- **Dependency conflicts**: install into a fresh virtual environment.
+- **A setup screen lists names**: those settings are missing.
+- **`PoolTimeout` / cannot reach the database**: use the Session pooler URL, check the password (URL-encode special characters), make sure the project is not paused, and restart the app cleanly instead of relying on hot reload (it can leave connections open).
+- **"Email not confirmed"**: confirm the email, or turn off email confirmation in Supabase.
+- **429 or quota errors**: wait a minute; `limit: 0` means the model has no free quota for your project.
+- **"No readable text found"**: the PDF is a scan (images only). Use a text PDF or run OCR first.
+- **Document Chat finds nothing**: lower `MIN_SIMILARITY` or select the document in the "Search in" box.
+- **Very slow answers**: check the terminal logs (`graph node finished`, `turn finished`) to see which step is slow.
 
-## Architecture notes
+## Limitations
 
-**Database**: Supabase PostgreSQL for conversations, messages, documents, preferences and memories; pgvector (`vector(768)`, HNSW cosine index) for chunks; Storage for original files; LangGraph checkpoint tables for graph state. App history and checkpoints are separate: history is what you see, checkpoints are what the model remembers. Documents with no conversation form the knowledge base; documents attached in a chat belong to it and are deleted with it. Deleting a conversation also removes its checkpoints and stored files.
+- Login is kept only for the life of the browser session; a page reload asks you to log in again. There is no password-reset screen.
+- Scanned PDFs are not supported (no OCR). PDF export of chats only renders Latin text; use TXT for other scripts.
+- Image generation is not implemented.
+- The embedding size (768) is fixed in `sql/schema.sql` and `config.py`.
+- Light/dark theme uses Streamlit's own menu (⋮ → Settings → Theme).
 
-**LangGraph**: `StateGraph` with typed state; nodes prepare, retrieve, respond, agent, approval, tools (ToolNode), summarize, handle_error; conditional edges route by mode and by whether the model asked for tools; `interrupt()` pauses for human approval before `save_memory_fact`; PostgreSQL checkpointer keyed by a per-conversation thread id; RetryPolicy with exponential backoff on temporary errors. See the workflow view in Settings.
-
-**Async and parallelism**: Streamlit scripts are synchronous, so one background thread runs one event loop (created once with `st.cache_resource`). The graph and the async checkpointer run there; the UI receives streamed tokens through a queue (`Job` in `chatbot.py`), so no `asyncio.run()` is ever repeated. Documents are processed concurrently (limit `DOC_CONCURRENCY`); blocking parsing/database/Storage work runs in threads; embeddings are batched and capped by `EMBED_CONCURRENCY`; storage upload and embedding of a document run together; one failed file never discards the others. Independent tool calls run in parallel through ToolNode. Database access uses a connection pool and batch inserts for chunks. Clients are cached; no user data is cached globally.
-
-## Manual test checklist (needs real credentials)
+## Manual test checklist
 
 1. Sign up, log in, log out.
-2. Send a message; confirm streaming, then restart the app and reopen the chat.
-3. Rename, delete, search, and clear a conversation.
-4. Press Stop during a long answer; press Regenerate.
-5. Upload a PDF, a TXT and a DOCX together; check progress, then re-upload one (should say duplicate).
-6. Document Chat: ask something in the file (citations with page), then something unrelated (should say not found).
-7. Delete a document; confirm it disappears from Storage and the question no longer finds it.
-8. AI Agent: "What is 18% of 2450?", "weather in Lucknow", "USD to INR", a web search, and two tools in one request.
-9. Agent: "Remember that I like tea" → approval card → Approve and Deny both behave.
-10. A 30+ message chat keeps working (summarisation); follow-ups still use earlier context.
+2. Send a message, restart the app, reopen the chat.
+3. Rename, delete, search and clear a conversation.
+4. Press Stop during a long answer; confirm the input is locked while generating; press Regenerate.
+5. Upload a PDF, a TXT and a DOCX together; re-upload one (should say duplicate).
+6. Document Chat: ask something in the file, then something unrelated (should say it was not found).
+7. Ask a document question that also needs the date or the web.
+8. General Chat: arithmetic, weather, currency, a web search, and a coding question.
+9. "Remember that I like tea" shows an approval card; test Approve and Deny.
+10. A 30-message chat keeps working (summarising); follow-ups still use earlier context.
 11. Attach an image and ask about it.
-12. Two different accounts cannot see each other's chats or documents.
-13. Wrong API key shows a clear message.
+12. Two accounts cannot see each other's chats or documents.

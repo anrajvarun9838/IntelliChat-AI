@@ -130,12 +130,11 @@ if settings.langsmith_api_key:
     os.environ.setdefault("LANGSMITH_PROJECT", settings.langsmith_project)
 
 # Chat modes: key -> label shown in the UI.
+# General Chat covers everyday chat, coding help, study help and tool use: the model
+# decides per message (see graph.py). Document Chat answers from uploaded documents.
 MODES: dict[str, str] = {
     "general": "General Chat",
     "document": "Document Chat",
-    "agent": "AI Agent",
-    "coding": "Coding Assistant",
-    "study": "Study Assistant",
 }
 
 RESPONSE_LENGTHS = ("Concise", "Balanced", "Detailed")

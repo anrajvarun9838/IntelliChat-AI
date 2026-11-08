@@ -200,6 +200,17 @@ def _import_graph():
     return graph
 
 
+def _fake_model(*replies):
+    """Fake chat model that returns the given messages in order and tolerates bind_tools()."""
+    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+
+    class FakeToolModel(GenericFakeChatModel):
+        def bind_tools(self, *args, **kwargs):
+            return self
+
+    return FakeToolModel(messages=iter(replies))
+
+
 def test_calculator_tool_and_datetime_tool():
     _import_graph()
     import tools
@@ -213,9 +224,8 @@ def test_graph_routing_functions():
     from langchain_core.messages import AIMessage
     cfg = lambda mode: {"configurable": {"mode": mode}}  # noqa: E731
     assert graph.route_by_mode({}, cfg("document")) == "retrieve"
-    assert graph.route_by_mode({}, cfg("agent")) == "agent"
-    for mode in ("general", "coding", "study"):
-        assert graph.route_by_mode({}, cfg(mode)) == "respond"
+    assert graph.route_by_mode({}, cfg("general")) == "agent"
+    assert graph.route_by_mode({}, {"configurable": {}}) == "agent"  # default is General Chat
 
     plain = AIMessage(content="done")
     safe_call = AIMessage(content="", tool_calls=[{"name": "calculator", "args": {"expression": "1+1"}, "id": "1"}])
@@ -234,13 +244,12 @@ def test_recent_messages_starts_on_user_message():
     assert isinstance(window[0], HumanMessage) and window[-1].content == "q3"
 
 
-def test_chat_graph_runs_and_remembers_per_thread(monkeypatch):
+def test_general_chat_runs_and_remembers_per_thread(monkeypatch):
     graph = _import_graph()
-    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
     from langchain_core.messages import AIMessage, HumanMessage
     from langgraph.checkpoint.memory import InMemorySaver
 
-    fake = GenericFakeChatModel(messages=iter([AIMessage(content="Hello there"), AIMessage(content="Second answer")]))
+    fake = _fake_model(AIMessage(content="Hello there"), AIMessage(content="Second answer"))
     monkeypatch.setattr(graph, "get_llm", lambda *a, **k: fake)
     app = graph.build_graph(InMemorySaver())
     cfg = {"configurable": {"thread_id": "thread-1", "mode": "general", "user_id": "u1", "conversation_id": "c1"}}
@@ -257,23 +266,82 @@ def test_chat_graph_runs_and_remembers_per_thread(monkeypatch):
     assert not other.values  # another thread is isolated
 
 
+def test_general_chat_calls_a_tool_when_the_model_asks(monkeypatch):
+    graph = _import_graph()
+    from langchain_core.messages import AIMessage, HumanMessage
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    ask = AIMessage(content="", tool_calls=[{"name": "calculator", "args": {"expression": "6*7"}, "id": "c1"}])
+    fake = _fake_model(ask, AIMessage(content="The answer is 42."))
+    monkeypatch.setattr(graph, "get_llm", lambda *a, **k: fake)
+    app = graph.build_graph(InMemorySaver())
+    cfg = {"configurable": {"thread_id": "t-tool", "mode": "general", "user_id": "u1"}}
+
+    final = asyncio.run(app.ainvoke({"messages": [HumanMessage("what is 6*7?")]}, cfg))
+    tool_results = [m for m in final["messages"] if getattr(m, "name", "") == "calculator"]
+    assert tool_results and tool_results[0].content == "42"
+    assert final["messages"][-1].content == "The answer is 42."
+
+
+def _patch_retrieve(monkeypatch, graph, seen=None):
+    async def fake_retrieve(user_id, conversation_id, query, k, doc_ids=None):
+        if seen is not None:
+            seen.update(user_id=user_id, query=query, k=k)
+        return [{"content": "Deadline is 5 May.", "filename": "plan.pdf", "page": 2, "similarity": 0.9}]
+
+    monkeypatch.setattr(graph.rag, "retrieve", fake_retrieve)
+
+
+def test_document_mode_retrieves_then_answers(monkeypatch):
+    graph = _import_graph()
+    from langchain_core.messages import AIMessage, HumanMessage
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    seen = {}
+    _patch_retrieve(monkeypatch, graph, seen)
+    fake = _fake_model(AIMessage(content="The deadline is 5 May [1]."))
+    monkeypatch.setattr(graph, "get_llm", lambda *a, **k: fake)
+    app = graph.build_graph(InMemorySaver())
+    cfg = {"configurable": {"thread_id": "t-doc", "mode": "document", "user_id": "u1",
+                            "conversation_id": "c1", "top_k": 3}}
+
+    final = asyncio.run(app.ainvoke({"messages": [HumanMessage("When is the deadline?")]}, cfg))
+    assert seen == {"user_id": "u1", "query": "When is the deadline?", "k": 3}
+    assert final["sources"][0]["filename"] == "plan.pdf"
+    assert final["messages"][-1].content == "The deadline is 5 May [1]."
+
+
+def test_document_mode_can_also_call_a_tool(monkeypatch):
+    graph = _import_graph()
+    from langchain_core.messages import AIMessage, HumanMessage
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    _patch_retrieve(monkeypatch, graph)
+    ask = AIMessage(content="", tool_calls=[{"name": "calculator", "args": {"expression": "5+3"}, "id": "c1"}])
+    fake = _fake_model(ask, AIMessage(content="From your documents: 5 May. Plus 3 days is 8 May."))
+    monkeypatch.setattr(graph, "get_llm", lambda *a, **k: fake)
+    app = graph.build_graph(InMemorySaver())
+    cfg = {"configurable": {"thread_id": "t-doc-tool", "mode": "document", "user_id": "u1",
+                            "conversation_id": "c1"}}
+
+    final = asyncio.run(app.ainvoke({"messages": [HumanMessage("deadline plus 3 days?")]}, cfg))
+    assert final["sources"]  # excerpts were retrieved first
+    assert any(getattr(m, "name", "") == "calculator" and m.content == "8" for m in final["messages"])
+    assert final["messages"][-1].content.endswith("8 May.")
+
+
 def test_agent_pauses_for_approval_and_handles_denial(monkeypatch):
     graph = _import_graph()
-    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
     from langchain_core.messages import AIMessage, HumanMessage
     from langgraph.checkpoint.memory import InMemorySaver
     from langgraph.types import Command
 
-    class FakeToolModel(GenericFakeChatModel):
-        def bind_tools(self, *args, **kwargs):
-            return self
-
     request = AIMessage(content="", tool_calls=[
         {"name": "save_memory_fact", "args": {"fact": "likes tea"}, "id": "call-1"}])
-    fake = FakeToolModel(messages=iter([request, AIMessage(content="Okay, I did not save it.")]))
+    fake = _fake_model(request, AIMessage(content="Okay, I did not save it."))
     monkeypatch.setattr(graph, "get_llm", lambda *a, **k: fake)
     app = graph.build_graph(InMemorySaver())
-    cfg = {"configurable": {"thread_id": "t-approval", "mode": "agent", "user_id": "u1"}}
+    cfg = {"configurable": {"thread_id": "t-approval", "mode": "general", "user_id": "u1"}}
 
     async def scenario():
         await app.ainvoke({"messages": [HumanMessage("remember I like tea")]}, cfg)
