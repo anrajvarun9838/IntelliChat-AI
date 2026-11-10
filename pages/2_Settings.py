@@ -6,7 +6,6 @@ import database as db
 import rag
 from auth import init_page, logout
 from config import LANGUAGES, RESPONSE_LENGTHS, settings
-from graph import GRAPH_EXPLANATION
 from utils import export_backup_json
 
 user = init_page("Settings · IntelliChat AI")
