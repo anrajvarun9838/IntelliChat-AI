@@ -19,53 +19,120 @@ The same architecture runs locally on Windows and on Streamlit Community Cloud.
 - **Settings**: response length, temperature, max tokens, reply language, time zone, custom instructions, retrieval top-k, saved memory, JSON backup, usage and response-time statistics.
 - **Optional** LangSmith tracing (off unless you set a key).
 
-## How the whole project works
 
-### 1.LangGraph workflow
-https://mermaid.live/edit#pako:eNpVUttO20AQ_ZXRPrVSQuM4SbFVgaIGlQdAKMlT6wot9iS2uhd3dh0Icf694zUBKu3DzNk5Z64HkdsCRSo2yj7lpSQP60VGmYHVp1-ZWK3ny3Umfn-G4fAC7hmpCWtJ-O2RvlwQOvRQIw19QwY2FarCcXTg3wfK8pAJzRkuM3EM8LKD28LmjUbjW1iuWZTQU4W7XhX1Ixbwt0HnK2sG4FBSXkK93WHuLZ30e6EtGiSpWpizjGTPB40fqCtTwVPlS_DWqreqlutAs3-Y8RFAIkstXLNKKU2h8CEgJ9o8NLN4bUaBbXzd-FNPi3cJ4Ie69nvW-vC3qYxUII17Qs5ywzrKmi34klAWl__rdPVCLhU31c0mlB-aWrN1x-kHQI1xIcRBZYD3wSaqU7G9jJM7fNCoLe0fNjLnUc-7_cm6JruTKijWsnHoYMNFzwOOXf0LNPu3xsMa256FBZf0ES7QVB3YjzJM8tW-Cf97dC2sbjmta7SWVL30K7aqQAKNzvHKHDxibjWChD7qLXkvYmwLV90xXt0tulPsr_M2JLsKzvW7LQZiS1UhUk8NDoRG0rJzxYHjgKdZosZMpNAdXdE8D3OrujVn5sjUWpqf1uoTm2yzLUW6kcqx19SF9Lio5JbkewgabuW7bYwXaTQ6j4KISA_iWaRxNDqbjMZfp0kSx6NkHA_EXqTT5Gw6mUySZBLPklkcxbPjQLyEtNFZNB4n53GSTJPJeTSZzo7_AH45MjU
+## Complete project workflow
 
-## Project structure
+```mermaid
+flowchart TD
+    subgraph S1["1. Start and login"]
+        A(["User opens the app"]) --> B{"Settings present?"}
+        B -->|no| B1["Setup screen lists missing keys"]
+        B -->|yes| C{"Logged in?"}
+        C -->|no| D["Login or sign-up page<br/>Supabase Auth"]
+        D -->|success| C
+        C -->|yes| E["Start runtime once<br/>create tables if missing, open checkpoint store, compile LangGraph"]
+        E --> F["Load preferences"]
+    end
 
+    F --> G["Chat page"]
+
+    subgraph S2["2. Pages and sidebar"]
+        G --> H["Sidebar<br/>new chat, search, history, rename, delete, clear, export"]
+        G --> I["Mode selector<br/>General Chat or Document Chat"]
+        G --> J["Knowledge Base page<br/>upload and delete documents"]
+        G --> K["Settings page<br/>preferences, saved memory, backup, usage"]
+    end
+
+    G --> L["Message box<br/>text, documents, images"]
+
+    subgraph S3["3. Sending a message"]
+        L --> M["Lock the input<br/>show Stop button"]
+        M --> N{"Attachments?"}
+        N -->|documents| DOC["Document ingestion<br/>see section 5"]
+        N -->|images| IMG["Resize image"]
+        N -->|text only| Q
+        DOC --> Q
+        IMG --> Q
+        Q["Create chat if new<br/>save user message"] --> R["Start background job<br/>load saved memory and settings"]
+    end
+
+    R --> PR
+
+    subgraph S4["4. LangGraph workflow"]
+        PR["prepare<br/>reset per-turn fields"] --> MD{"Mode?"}
+        MD -->|document| RT["retrieve<br/>embed question, search pgvector"]
+        MD -->|general| AG
+        RT -->|ok| AG["agent<br/>Gemini with tools"]
+        RT -->|error| ER["handle_error"]
+        AG --> OUT{"Model output?"}
+        OUT -->|empty or blocked| ER
+        OUT -->|tool call| TL["tools<br/>run in parallel"]
+        OUT -->|save memory request| AP["approval<br/>graph pauses"]
+        OUT -->|final answer| LT{"Long thread?"}
+        TL --> AG
+        AP -->|approved| TL
+        AP -->|denied| AG
+        LT -->|yes| SM["summarize<br/>old messages become a summary"]
+        LT -->|no| FIN(["Graph finished"])
+        SM --> FIN
+        ER --> FIN
+    end
+
+    AG -.->|streamed tokens| ST["Answer streams to the screen"]
+    AP -.-> CARD["Approve or Deny card"]
+    CARD -->|decision, graph resumes| AP
+    FIN --> SAVE["Save answer, sources, tools used,<br/>tokens and response time"]
+    SAVE --> UNL(["Unlock the input"])
+    M -.-> STOP["Stop clicked<br/>cancel job, keep partial answer"]
+    STOP -.-> UNL
+
+    subgraph S5["5. Document ingestion"]
+        D1["Checksum"] --> D2{"Duplicate?"}
+        D2 -->|yes| D3["Skip"]
+        D2 -->|no| D4["Create record: processing"]
+        D4 --> D5["Upload original to Storage"]
+        D4 --> D6["Extract text with page numbers"]
+        D6 --> D7["Split into chunks"]
+        D7 --> D8["Embed in batches"]
+        D5 --> D9["Insert chunks and vectors"]
+        D8 --> D9
+        D9 --> D10(["Status: ready"])
+        D6 -->|no text or error| D11["Roll back and show error"]
+        D8 -->|error| D11
+    end
+
+    DOC -.-> D1
+    J --> D1
+
+    subgraph S6["6. Storage and services"]
+        PG[("PostgreSQL<br/>chats, messages, documents,<br/>memory, preferences")]
+        VEC[("pgvector<br/>document chunks")]
+        CKP[("LangGraph checkpoints")]
+        STO[("Supabase Storage<br/>original files")]
+        GEM["Google Gemini<br/>chat model and embeddings"]
+        WEB["Public web APIs<br/>search, Wikipedia, weather, currency"]
+    end
+
+    Q -.-> PG
+    SAVE -.-> PG
+    D4 -.-> PG
+    H -.-> PG
+    K -.-> PG
+    RT -.-> VEC
+    D9 -.-> VEC
+    PR -.->|state saved after every step| CKP
+    D5 -.-> STO
+    RT -.-> GEM
+    AG -.-> GEM
+    SM -.-> GEM
+    D8 -.-> GEM
+    TL -.-> WEB
 ```
-app.py                      main chat page (entry point)
-pages/1_Knowledge_Base.py   upload and manage documents
-pages/2_Settings.py         preferences, memory, backup, usage
-config.py                   settings, model IDs, modes
-utils.py                    pure helpers (errors, retries, calculator, exports)
-database.py                 PostgreSQL access (pool, user-scoped queries)
-chatbot.py                  Gemini clients, background loop, streaming jobs
-graph.py                    LangGraph workflow
-rag.py                      ingestion and retrieval
-tools.py                    agent tools
-auth.py                     Supabase Auth and page bootstrap
-sql/schema.sql              tables, indexes, pgvector, RLS, storage bucket
-tests/test_core.py          automated tests (no API calls)
-```
 
-## Tools
-
-| Tool | What it does | Needs a key |
-|---|---|---|
-| `calculator` | safe arithmetic (no `eval`) | no |
-| `current_datetime` | date and time in any time zone | no |
-| `web_search` | web results | optional `TAVILY_API_KEY`, otherwise key-less DuckDuckGo |
-| `wikipedia_search` | article introduction | no |
-| `get_weather` | current weather and 3-day forecast | no |
-| `convert_currency` | exchange-rate conversion | no |
-| `save_memory_fact` | saves a fact to long-term memory, **only after you approve** | no |
-
-## Database
-
-| Table | Purpose |
-|---|---|
-| `conversations` | chats, mode, LangGraph thread id |
-| `messages` | what you see in the chat (with sources, tools, tokens, response time) |
-| `documents` | uploaded files (checksum, storage path, scope) |
-| `document_chunks` | text chunks and 768-dimension vectors (HNSW index) |
-| `user_preferences`, `user_memories`, `user_profiles` | settings, saved facts, profile |
-| `checkpoints*` | LangGraph state, created automatically |
-
-Chat history (what you see) and LangGraph checkpoints (what the model remembers) are separate on purpose. The app connects as the database owner and adds `user_id` to every query; Row Level Security policies protect the same tables if someone reaches them through Supabase's public API.
+**How to read it**
+- Solid arrows show the order of steps. Dotted arrows show which service or storage a step uses.
+- Documents added on the Knowledge Base page or in the chat box go through the same ingestion pipeline (section 5).
+- In Document Chat the question is first matched against your documents (`retrieve`), and then the same `agent` node can still call tools, for example for the date or the web.
 
 ## Setup
 
@@ -88,8 +155,7 @@ cd intellchat-ai
 py -3.11 -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-copy .env.example .env
-notepad .env
+copy .env
 python -m pytest -q
 streamlit run app.py
 ```
@@ -111,50 +177,3 @@ Open http://localhost:8501, sign up, and start chatting. Stop the app with `Ctrl
 | `DB_POOL_SIZE` | no | database connections, default 5 |
 
 Never commit `.env` or any key to GitHub (`.gitignore` already excludes it).
-
-## Deploy to Streamlit Community Cloud
-
-1. Push the project to GitHub.
-2. On https://share.streamlit.io choose **New app**, pick the repository, branch `main`, main file `app.py`.
-3. In **Advanced settings → Secrets**, paste the same values as TOML with quotes:
-   ```toml
-   GEMINI_API_KEY = "..."
-   DATABASE_URL = "postgresql://postgres.xxxx:PASSWORD@aws-0-REGION.pooler.supabase.com:5432/postgres"
-   SUPABASE_URL = "https://xxxx.supabase.co"
-   SUPABASE_ANON_KEY = "..."
-   SUPABASE_SERVICE_KEY = "..."
-   ```
-4. Deploy, then set the Site URL under Supabase **Authentication → URL Configuration**.
-
-## Troubleshooting
-
-- **A setup screen lists names**: those settings are missing.
-- **`PoolTimeout` / cannot reach the database**: use the Session pooler URL, check the password (URL-encode special characters), make sure the project is not paused, and restart the app cleanly instead of relying on hot reload (it can leave connections open).
-- **"Email not confirmed"**: confirm the email, or turn off email confirmation in Supabase.
-- **429 or quota errors**: wait a minute; `limit: 0` means the model has no free quota for your project.
-- **"No readable text found"**: the PDF is a scan (images only). Use a text PDF or run OCR first.
-- **Document Chat finds nothing**: lower `MIN_SIMILARITY` or select the document in the "Search in" box.
-- **Very slow answers**: check the terminal logs (`graph node finished`, `turn finished`) to see which step is slow.
-
-## Limitations
-
-- Login is kept only for the life of the browser session; a page reload asks you to log in again. There is no password-reset screen.
-- Scanned PDFs are not supported (no OCR). PDF export of chats only renders Latin text; use TXT for other scripts.
-- Image generation is not implemented.
-- The embedding size (768) is fixed in `sql/schema.sql` and `config.py`.
-- Light/dark theme uses Streamlit's own menu (⋮ → Settings → Theme).
-
-## Manual test checklist
-
-1. Sign up, log in, log out.
-2. Send a message, restart the app, reopen the chat.
-3. Rename, delete, search and clear a conversation.
-4. Press Stop during a long answer; confirm the input is locked while generating; press Regenerate.
-5. Upload a PDF, a TXT and a DOCX together; re-upload one (should say duplicate).
-6. Document Chat: ask something in the file, then something unrelated (should say it was not found).
-7. Ask a document question that also needs the date or the web.
-8. General Chat: arithmetic, weather, currency, a web search, and a coding question.
-9. "Remember that I like tea" shows an approval card; test Approve and Deny.
-10. A 30-message chat keeps working (summarising); follow-ups still use earlier context.
-11. Attach an image and ask about it.
-12. Two accounts cannot see each other's chats or documents.
