@@ -3,6 +3,7 @@ streamlit>=1.43,<2
 langchain-core>=1.0,<2
 langchain-text-splitters>=1.0,<2
 langchain-google-genai>=4.0,<5
+langchain-groq
 langgraph>=1.0,<2
 langgraph-checkpoint-postgres>=3.0,<4
 psycopg[binary,pool]>=3.2,<4

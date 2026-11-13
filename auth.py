@@ -133,7 +133,7 @@ def logout() -> None:
 
 def init_page(title: str = "IntelliChat AI") -> dict:
     """Common start for every page. Returns the logged-in user ({'id', 'email'})."""
-    st.set_page_config(page_title=title, page_icon="💬", layout="wide", initial_sidebar_state="expanded")
+    st.set_page_config(page_title=title, layout="wide", initial_sidebar_state="expanded")
 
     missing = settings.missing()
     if missing:

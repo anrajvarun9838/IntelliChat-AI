@@ -1,8 +1,10 @@
 # IntelliChat AI
 
-A ChatGPT-style chatbot built with **Streamlit, LangChain, LangGraph and Google Gemini**, backed by **Supabase** (PostgreSQL, pgvector, Storage and Auth). You can chat normally, ask questions about your own PDF/TXT/DOCX documents (RAG), and let the AI use tools such as a calculator, web search, weather and currency conversion. Conversations, documents and memory are stored per user and survive restarts.
+An AI assistant that chats, reads your documents and uses tools, all in one place.
 
-The same architecture runs locally on Windows and on Streamlit Community Cloud.
+IntelliChat AI is a conversational assistant built with Streamlit, LangChain, LangGraph and Google Gemini, with Supabase (PostgreSQL, pgvector, Storage and Auth) as its backend. It has two modes. General Chat handles everyday questions, coding help and step-by-step explanations, and calls tools when a task needs them, such as a calculator, web search, weather or currency conversion. Document Chat lets you upload PDF, TXT and DOCX files and ask questions about them, with answers that cite the file and page they came from.
+
+Each conversation keeps its own memory, long chats are summarised automatically, and you can save facts to carry across chats. Anything that changes your saved data asks for your approval first. Answers stream in as they are written, and you can stop or regenerate them at any time. Accounts, chats, documents and memory are stored per user, so everything is still there after a restart. The same setup runs on a local Windows machine and on Streamlit Community Cloud.
 
 ## Features
 
@@ -109,7 +111,7 @@ flowchart TD
         VEC[("pgvector<br/>document chunks")]
         CKP[("LangGraph checkpoints")]
         STO[("Supabase Storage<br/>original files")]
-        GEM["Google Gemini<br/>chat model and embeddings"]
+        GEM["Groq and Google Gemini<br/>chat model and embeddings"]
         WEB["Public web APIs<br/>search, Wikipedia, weather, currency"]
     end
 
@@ -144,11 +146,7 @@ flowchart TD
 4. **Connect → Session pooler**: copy that connection string (port 5432) as `DATABASE_URL`. The direct connection is IPv6-only on the free plan and often fails.
 5. **Authentication → Providers → Email**: for local testing you may turn off "Confirm email"; otherwise new users must click the link in the confirmation email first.
 
-### 2. Gemini API key
-
-Create a key at https://aistudio.google.com/apikey.
-
-### 3. Run locally (Windows)
+### 2. Run locally (Windows)
 
 ```bat
 cd intellchat-ai
@@ -167,6 +165,7 @@ Open http://localhost:8501, sign up, and start chatting. Stop the app with `Ctrl
 | Name | Required | Purpose |
 |---|---|---|
 | `GEMINI_API_KEY` | yes | Gemini key |
+| `GROQ_API_KEY` | yes | Groq key |
 | `DATABASE_URL` | yes | Supabase Session pooler connection string |
 | `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_KEY` | yes | Auth and Storage |
 | `CHAT_MODEL`, `EMBEDDING_MODEL` | no | defaults `gemini-3.8-flash`, `gemini-embedding-001` (confirm availability in Google AI Studio) |

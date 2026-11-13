@@ -11,7 +11,7 @@ from utils import export_backup_json
 user = init_page("Settings · IntelliChat AI")
 
 with st.sidebar:
-    st.title("💬 IntelliChat AI")
+    st.title("IntelliChat AI")
     st.page_link("app.py", label="Chat", icon=":material/chat:")
     st.page_link("pages/1_Knowledge_Base.py", label="Knowledge Base", icon=":material/library_books:")
     st.page_link("pages/2_Settings.py", label="Settings", icon=":material/settings:")
@@ -36,8 +36,8 @@ with st.form("prefs_form"):
         c1.text_input("Model", value=model, disabled=True,
                       help="Change CHAT_MODEL in your .env / Streamlit Secrets, or add more with CHAT_MODEL_OPTIONS.")
     length = c2.selectbox("Response length", RESPONSE_LENGTHS, index=RESPONSE_LENGTHS.index(prefs["response_length"]))
-    temperature = c1.slider("Temperature", 0.0, 2.0, float(prefs["temperature"]), 0.1,
-                            help="Google recommends leaving Gemini 3 models at 1.0; lower values can cause repetition.")
+    temperature = c1.slider("Temperature", 0.0, 2.0, float(prefs["temperature"]), 0.5,
+                            help="Groq recommends leaving Groq models at 0.5; lower values can cause repetition.")
     max_tokens = c2.slider("Max output tokens", 1024, 16384, int(prefs["max_tokens"]), 1024,
                            help="Includes the model's internal reasoning tokens, so very low values can cut answers short.")
     language = c1.selectbox("Reply language", LANGUAGES,

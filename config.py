@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 
 def _read(name: str, default: str = "") -> str:
@@ -47,7 +47,8 @@ def _read_float(name: str, default: float) -> float:
 
 @dataclass(frozen=True)
 class Settings:
-    # --- Gemini -----------------------------------------------------------
+    # --- model -----------------------------------------------------------
+    groq_api_key: str
     gemini_api_key: str
     chat_model: str
     model_options: tuple[str, ...]
@@ -81,6 +82,7 @@ class Settings:
         """Names of required settings that are not configured."""
         required = {
             "GEMINI_API_KEY": self.gemini_api_key,
+            "GROQ_API_KEY": self.groq_api_key,
             "DATABASE_URL": self.database_url,
             "SUPABASE_URL": self.supabase_url,
             "SUPABASE_ANON_KEY": self.supabase_anon_key,
@@ -90,11 +92,12 @@ class Settings:
 
 
 def load_settings() -> Settings:
-    chat_model = _read("CHAT_MODEL", "gemini-3.8-flash")
+    chat_model = _read("CHAT_MODEL", "openai/gpt-oss-20b")
     extra = [m.strip() for m in _read("CHAT_MODEL_OPTIONS").split(",") if m.strip()]
     options = tuple(dict.fromkeys([chat_model, *extra]))
     return Settings(
         gemini_api_key=_read("GEMINI_API_KEY") or _read("GOOGLE_API_KEY"),
+        groq_api_key=_read("GROQ_API_KEY"),
         chat_model=chat_model,
         model_options=options,
         embedding_model=_read("EMBEDDING_MODEL", "gemini-embedding-001"),
@@ -145,13 +148,11 @@ LANGUAGES = (
 )
 
 DEFAULT_PREFERENCES: dict = {
-    # Google recommends leaving Gemini 3 models at temperature 1.0.
-    "temperature": 1.0,
+    "temperature": 0.5,
     "max_tokens": 8192,
     "response_length": "Balanced",
     "language": "English",
     "system_instructions": "",
-    "model": settings.chat_model,
     "top_k": 5,
     "timezone": "UTC",
 }

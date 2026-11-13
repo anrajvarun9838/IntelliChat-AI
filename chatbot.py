@@ -24,7 +24,8 @@ import streamlit as st
 from langchain_core.messages import (
     AIMessage, AIMessageChunk, HumanMessage, RemoveMessage, ToolMessage,
 )
-from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_groq import ChatGroq
 from langgraph.types import Command
 
 import database as db
@@ -39,13 +40,13 @@ logger = logging.getLogger("intellichat.chatbot")
 # Gemini clients (cached, shared, contain no per-user data)
 # ---------------------------------------------------------------------------
 @lru_cache(maxsize=16)
-def get_llm(model: str, temperature: float, max_output_tokens: int) -> ChatGoogleGenerativeAI:
+def get_llm(model: str, temperature: float, max_output_tokens: int) -> ChatGroq:
     """Chat model client. Cached per (model, temperature, max tokens)."""
-    return ChatGoogleGenerativeAI(
+    return ChatGroq(
         model=model,
-        google_api_key=settings.gemini_api_key,
+        api_key=settings.groq_api_key,
         temperature=temperature,
-        max_output_tokens=max_output_tokens,
+        max_tokens=max_output_tokens,  # Groq's name for the output limit
         max_retries=1,  # the graph's RetryPolicy handles the rest with backoff
     )
 

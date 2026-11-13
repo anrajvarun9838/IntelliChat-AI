@@ -11,7 +11,7 @@ from utils import format_timestamp, friendly_error, shorten
 user = init_page("Knowledge Base · IntelliChat AI")
 
 with st.sidebar:
-    st.title("💬 IntelliChat AI")
+    st.title("IntelliChat AI")
     st.page_link("app.py", label="Chat", icon=":material/chat:")
     st.page_link("pages/1_Knowledge_Base.py", label="Knowledge Base", icon=":material/library_books:")
     st.page_link("pages/2_Settings.py", label="Settings", icon=":material/settings:")

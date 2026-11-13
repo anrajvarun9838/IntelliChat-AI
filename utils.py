@@ -39,7 +39,7 @@ def setup_logging() -> None:
 def text_of(content: Any) -> str:
     """Return only the text of a LangChain message `content`.
 
-    Gemini can return a plain string or a list of content blocks (text,
+    Groq can return a plain string or a list of content blocks (text,
     thinking, images...). Only text blocks are user-visible.
     """
     if content is None:
@@ -65,19 +65,19 @@ def friendly_error(exc: BaseException) -> str:
     raw = f"{type(exc).__name__}: {exc}"
     low = raw.lower()
     if "api key not valid" in low or "api_key_invalid" in low or "invalid api key" in low:
-        return "The Gemini API key is invalid. Check GEMINI_API_KEY in your .env file or Streamlit Secrets."
-    if "permission_denied" in low or ("403" in low and "gemini" in low):
-        return "The Gemini API rejected the request (permission denied). Check that the key's project has the Gemini API enabled."
+        return "The Groq API key is invalid. Check GROQ_API_KEY in your .env file or Streamlit Secrets."
+    if "permission_denied" in low or ("403" in low and "groq" in low):
+        return "The Groq API rejected the request (permission denied). Check that the key's project has the Groq API enabled."
     if "limit: 0" in low:
         return ("This model has no free-tier quota for your project. Pick another model in "
                 "Settings, or enable billing in Google AI Studio.")
     if "429" in low or "resource_exhausted" in low or "quota" in low or "rate limit" in low:
-        return ("Gemini rate limit or quota reached. Wait a minute and try again; "
+        return ("Groq rate limit or quota reached. Wait a minute and try again; "
                 "if it keeps happening your daily free-tier quota may be used up.")
     if ("404" in low and "model" in low) or "is not found for api version" in low or "is not supported for" in low:
-        return "The selected Gemini model is unavailable. Change CHAT_MODEL (or the model in Settings) to a currently supported ID."
+        return "The selected Groq model is unavailable. Change CHAT_MODEL (or the model in Settings) to a currently supported ID."
     if "503" in low or "unavailable" in low or "overloaded" in low:
-        return "Gemini is temporarily overloaded. Please try again in a moment."
+        return "Groq is temporarily overloaded. Please try again in a moment."
     if "timeout" in low or "timed out" in low:
         return "The request timed out. Please try again."
     if "graphrecursionerror" in low or "recursion limit" in low:

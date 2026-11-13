@@ -116,7 +116,7 @@ def make_config(conversation: dict, mode: str, doc_ids: list[str]) -> dict:
             "user_id": uid,
             "conversation_id": conversation["id"],
             "mode": mode,
-            "model": prefs["model"] if prefs["model"] in settings.model_options else settings.chat_model,
+            "model": settings.chat_model,  
             "temperature": prefs["temperature"],
             "max_tokens": prefs["max_tokens"],
             "language": prefs["language"],
@@ -202,7 +202,7 @@ def run_turn(conversation: dict, mode: str, graph_input, config: dict) -> None:
 # Sidebar
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    st.title("💬 IntelliChat AI")
+    st.title("IntelliChat AI")
     if st.button("New chat", icon=":material/add:", use_container_width=True, type="primary"):
         ss.conv_id = None
         ss.pop("pending_approval", None)

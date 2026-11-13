@@ -133,7 +133,7 @@ def _cfg(config: RunnableConfig) -> dict:
 
 def _llm(cfg: dict):
     return get_llm(cfg.get("model") or settings.chat_model,
-                   float(cfg.get("temperature", 1.0)),
+                   float(cfg.get("temperature", 0.5)),
                    int(cfg.get("max_tokens", 8192)))
 
 
