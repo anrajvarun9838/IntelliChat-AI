@@ -15,7 +15,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import utils  # noqa: E402
 
+@pytest.fixture(autouse=True)
+def _no_memory_lookup(monkeypatch):
+    try:
+        import graph
+    except Exception:  # packages not installed: graph tests skip themselves anyway
+        return
 
+    async def nothing(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(graph.memory, "recall", nothing)
 # ---------------------------------------------------------------------------
 # utils (pure Python)
 # ---------------------------------------------------------------------------

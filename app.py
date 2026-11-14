@@ -116,7 +116,7 @@ def make_config(conversation: dict, mode: str, doc_ids: list[str]) -> dict:
             "user_id": uid,
             "conversation_id": conversation["id"],
             "mode": mode,
-            "model": settings.chat_model,  
+            "model": prefs.get("model") or settings.chat_model,
             "temperature": prefs["temperature"],
             "max_tokens": prefs["max_tokens"],
             "language": prefs["language"],
@@ -124,7 +124,6 @@ def make_config(conversation: dict, mode: str, doc_ids: list[str]) -> dict:
             "system_instructions": prefs["system_instructions"],
             "top_k": prefs["top_k"],
             "doc_ids": doc_ids,
-            "memories": [m["content"] for m in db.list_memories(uid)],
             "timezone": tz,
         },
         "recursion_limit": 14,
@@ -151,7 +150,7 @@ def ingest_attachments(conversation_id: str, files) -> None:
         st.toast(f"{result.filename}: {result.message}", icon=icon)
 
 
-def run_turn(conversation: dict, mode: str, graph_input, config: dict) -> None:
+def run_turn(conversation, mode, graph_input, config, user_text: str | None = None) -> None:
     """Stream one assistant answer, save it, then rerun to show the final layout."""
     cid = conversation["id"]
     job = chatbot.start_turn(graph_input, config)
@@ -191,6 +190,8 @@ def run_turn(conversation: dict, mode: str, graph_input, config: dict) -> None:
             db.add_message(uid, cid, "assistant", result.text, mode=mode, sources=result.sources,
                            tools_used=result.tools_used, tokens_in=result.tokens_in or None,
                            tokens_out=result.tokens_out or None, latency_ms=result.latency_ms)
+            if user_text:  # background memory update; it does not delay the UI
+                chatbot.start_memory_update(uid, user_text, result.text)
         pending = chatbot.get_pending_approval(config)
         ss.pending_approval = {"conversation_id": cid, "payload": pending} if pending else None
         if not result.text.strip() and not result.error and not pending:
@@ -382,7 +383,8 @@ if generating:
     if queued:
         text, files = queued["text"], queued["files"]
 elif ss.get("pending_prompt"):
-    text = ss.pop("pending_prompt")
+        # NOTE: pending_prompt is reserved for future use; currently nothing sets it.
+        pass
 
 if text or files:
     welcome.empty()  # hide the welcome message as soon as a message is sent
@@ -391,7 +393,7 @@ try:
     if ss.get("approval_decision") is not None and conversation:
         decision = ss.pop("approval_decision")
         ss.pending_approval = None
-        run_turn(conversation, mode, Command(resume=decision), make_config(conversation, mode, doc_ids))
+        run_turn(conversation, mode, Command(resume=decision), make_config(conversation, mode, doc_ids), user_text=text)
 
     elif ss.pop("regenerate", False) and conversation and messages:
         last_user = next((m for m in reversed(messages) if m["role"] == "user"), None)

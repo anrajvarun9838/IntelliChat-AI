@@ -1,4 +1,4 @@
-"""Gemini clients, the background asyncio runtime, and turn execution.
+"""Groq chat clients, the background asyncio runtime, and turn execution.
 
 Streamlit scripts are synchronous and re-run on every interaction, so they must
 never call `asyncio.run()` repeatedly. Instead this module starts ONE background
@@ -37,7 +37,7 @@ logger = logging.getLogger("intellichat.chatbot")
 
 
 # ---------------------------------------------------------------------------
-# Gemini clients (cached, shared, contain no per-user data)
+# Groq chat clients and Gemini embedding clients (cached, shared, no per-user data)
 # ---------------------------------------------------------------------------
 @lru_cache(maxsize=16)
 def get_llm(model: str, temperature: float, max_output_tokens: int) -> ChatGroq:
@@ -243,6 +243,14 @@ def start_turn(graph_input: dict | Command, config: dict) -> Job:
 
     return Job(runtime, fn)
 
+def start_memory_update(user_id: str, user_text: str, assistant_text: str) -> None:
+    """Fire-and-forget: update long-term memory in the background, after the answer is shown."""
+    if not settings.auto_memory:
+        return
+    from memory import update_memory  # imported here to avoid a circular import
+
+    runtime = get_runtime()
+    asyncio.run_coroutine_threadsafe(update_memory(user_id, user_text, assistant_text), runtime.loop)
 
 def build_human_message(text: str, images: list[tuple[str, str]] | None = None) -> HumanMessage:
     """Create the user's message, optionally with images as (mime_type, base64) pairs."""

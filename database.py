@@ -65,14 +65,36 @@ def _clean_all(rows: Sequence[dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Schema bootstrap
 # ---------------------------------------------------------------------------
-def ensure_schema() -> None:
-    """Run sql/schema.sql if the app tables do not exist yet."""
-    with cursor() as cur:
-        cur.execute("select to_regclass('public.document_chunks') as t")
-        if cur.fetchone()["t"] is not None:
-            return
-        cur.execute(SCHEMA_PATH.read_text(encoding="utf-8"))
+MEMORY_MIGRATION = """
+alter table public.user_memories add column if not exists embedding vector(768);
+alter table public.user_memories add column if not exists source text not null default 'manual';
+alter table public.user_memories add column if not exists updated_at timestamptz not null default now();
+"""
 
+# Sentinel row tracked in a small helper table so MEMORY_MIGRATION only runs once.
+_MIGRATION_FLAG_SQL = """
+create table if not exists public._schema_migrations (
+    name text primary key,
+    applied_at timestamptz not null default now()
+);
+"""
+
+
+def ensure_schema() -> None:
+    """Run sql/schema.sql if the app tables do not exist yet, then add any newer columns
+    (MEMORY_MIGRATION). The migration is tracked in _schema_migrations so it only runs
+    once per database, not on every server restart."""
+    with cursor() as cur:
+        cur.execute(_MIGRATION_FLAG_SQL)
+        cur.execute("select to_regclass('public.document_chunks') as t")
+        if cur.fetchone()["t"] is None:
+            cur.execute(SCHEMA_PATH.read_text(encoding="utf-8"))
+        # Only run MEMORY_MIGRATION if it has not been recorded yet.
+        cur.execute("select 1 from public._schema_migrations where name = 'memory_v1'")
+        if cur.fetchone() is None:
+            cur.execute(MEMORY_MIGRATION)
+            cur.execute("insert into public._schema_migrations (name) values ('memory_v1') "
+                        "on conflict do nothing")
 
 def lock_down_checkpoint_tables() -> None:
     """Enable RLS (with no policies) on LangGraph's tables so the public API cannot read them."""
@@ -117,7 +139,7 @@ def list_memories(user_id: str) -> list[dict]:
     with cursor() as cur:
         cur.execute("select id, content, created_at from user_memories "
                     "where user_id = %s order by created_at desc limit 50", (user_id,))
-        return cur.fetchall()
+        return _clean_all(cur.fetchall())
 
 
 def add_memory(user_id: str, content: str) -> None:
@@ -235,6 +257,57 @@ def clear_conversation(user_id: str, conversation_id: str) -> str | None:
                     "where id = %s and user_id = %s", (conversation_id, user_id))
     return str(row["thread_id"])
 
+def memory_stats(user_id: str) -> dict:
+    with cursor() as cur:
+        cur.execute("select count(*) as total, count(*) filter (where embedding is null) as missing "
+                    "from user_memories where user_id = %s", (user_id,))
+        return cur.fetchone()
+
+
+def memories_missing_embedding(user_id: str, limit: int = 50) -> list[dict]:
+    with cursor() as cur:
+        cur.execute("select id, content from user_memories where user_id = %s and embedding is null "
+                    "order by id limit %s", (user_id, limit))
+        return cur.fetchall()
+
+
+def set_memory_embeddings(user_id: str, rows: list[tuple[int, str]]) -> None:
+    with cursor() as cur:
+        cur.executemany("update user_memories set embedding = %s::vector where id = %s and user_id = %s",
+                        [(emb, mem_id, user_id) for mem_id, emb in rows])
+
+
+def search_memories(user_id: str, embedding: str, k: int) -> list[dict]:
+    with cursor() as cur:
+        cur.execute("select id, content, 1 - (embedding <=> %s::vector) as similarity "
+                    "from user_memories where user_id = %s and embedding is not null "
+                    "order by embedding <=> %s::vector limit %s", (embedding, user_id, embedding, k))
+        return cur.fetchall()
+
+
+def apply_memory_changes(user_id: str, deletes: list[int], updates: list[tuple[int, str, str]],
+                         adds: list[tuple[str, str]], dup_threshold: float = 0.92) -> dict:
+    """Apply delete / update / add operations in one transaction; near-duplicate adds are skipped."""
+    done = {"added": 0, "updated": 0, "deleted": 0}
+    with cursor() as cur:
+        if deletes:
+            cur.execute("delete from user_memories where user_id = %s and id = any(%s)", (user_id, deletes))
+            done["deleted"] = cur.rowcount
+        for mem_id, content, emb in updates:
+            cur.execute("update user_memories set content = %s, embedding = %s::vector, source = 'auto', "
+                        "updated_at = now() where id = %s and user_id = %s", (content, emb, mem_id, user_id))
+            done["updated"] += cur.rowcount
+        for content, emb in adds:
+            cur.execute("select 1 - (embedding <=> %s::vector) as sim from user_memories "
+                        "where user_id = %s and embedding is not null "
+                        "order by embedding <=> %s::vector limit 1", (emb, user_id, emb))
+            nearest = cur.fetchone()
+            if nearest and nearest["sim"] >= dup_threshold:
+                continue  # already known
+            cur.execute("insert into user_memories (user_id, content, embedding, source) "
+                        "values (%s, %s, %s::vector, 'auto')", (user_id, content, emb))
+            done["added"] += 1
+    return done
 
 # ---------------------------------------------------------------------------
 # Messages

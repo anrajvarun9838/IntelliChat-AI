@@ -1,8 +1,8 @@
 """The LangGraph workflow behind IntelliChat AI.
 
-START -> prepare -> (route by mode) -+-> retrieve -+
-                                     |             +-> agent <-> approval / tools -> [summarize] -> END
-                                     +-------------+
+START -> prepare -> recall -> (route by mode) -+-> retrieve -+
+                                             |             +-> agent <-> approval / tools -> [summarize] -> END
+                                             +-------------+
 Document mode first retrieves excerpts from the user's documents; General mode skips that step.
 Both then reach the same agent node, so the model decides per message whether to answer directly
 (from documents or its own knowledge), write code, teach, or call tools (e.g. real-time info).
@@ -27,6 +27,7 @@ from chatbot import get_llm
 from config import settings
 from tools import APPROVAL_TOOLS, TOOLS
 from utils import is_transient, text_of
+import memory
 
 logger = logging.getLogger("intellichat.graph")
 
@@ -38,6 +39,7 @@ class ChatState(TypedDict, total=False):
     sources: list[dict]   # citation info for this turn
     error: str            # set when a step fails in an expected way
     approved: bool        # result of the human-approval step
+    memories: list[str]   # saved facts relevant to this message
 
 
 # ---------------------------------------------------------------------------
@@ -95,10 +97,12 @@ def build_system_prompt(cfg: dict, state: ChatState) -> str:
         parts.append("Custom instructions from the user:\n" + cfg["system_instructions"][:2000])
     if mode in ("general", "document") and cfg.get("timezone"):
         parts.append(f"The user's time zone is {cfg['timezone']}; use it for time questions unless told otherwise.")
-    memories = cfg.get("memories") or []
+
+    memories = state.get("memories") or []
     if memories:
-        parts.append("Facts the user chose to save (use when relevant):\n" +
-                     "\n".join(f"- {m}" for m in memories[:20]))
+        parts.append("Things you remember about the user (use only when relevant):\n" +
+                     "\n".join(f"- {m}" for m in memories))
+
     if state.get("summary"):
         parts.append("Summary of the earlier part of this conversation:\n" + state["summary"])
     if mode == "document":
@@ -147,7 +151,19 @@ RETRY = RetryPolicy(initial_interval=1.0, backoff_factor=2.0, max_interval=15.0,
 # ---------------------------------------------------------------------------
 async def prepare(state: ChatState, config: RunnableConfig) -> dict:
     """Input processing: reset the per-turn fields."""
-    return {"context": "", "sources": [], "error": "", "approved": False}
+    return {"context": "", "sources": [], "error": "", "approved": False, "memories": []}
+
+
+async def recall(state: ChatState, config: RunnableConfig) -> dict:
+    """Long-term memory: saved facts relevant to this message (semantic search)."""
+    cfg = _cfg(config)
+    try:
+        facts = await memory.recall(cfg.get("user_id"), last_human_text(state["messages"]))
+    except Exception:  # noqa: BLE001 - memory is optional; never block the answer
+        logger.warning("Memory recall failed; continuing without it", exc_info=True)
+        return {}
+    logger.info("Recalled %d memory fact(s)", len(facts))
+    return {"memories": facts}
 
 
 def route_by_mode(state: ChatState, config: RunnableConfig) -> Literal["retrieve", "agent"]:
@@ -190,7 +206,7 @@ async def approval(state: ChatState, config: RunnableConfig) -> dict:
     if decision:
         return {"approved": True}
     denied = [ToolMessage(content="The user denied permission, so nothing was done. "
-                                  "Do not retry; tell the user the action was not performed.",
+                                   "Do not retry; tell the user the action was not performed.",
                           tool_call_id=c["id"], name=c["name"]) for c in last.tool_calls]
     return {"approved": False, "messages": denied}
 
@@ -267,6 +283,7 @@ def build_graph(checkpointer):
     """Compile the workflow. `checkpointer` persists state per thread (PostgreSQL in the app)."""
     builder = StateGraph(ChatState)
     builder.add_node("prepare", prepare)
+    builder.add_node("recall", recall)
     builder.add_node("retrieve", retrieve, retry_policy=RETRY)
     builder.add_node("agent", agent, retry_policy=RETRY)
     builder.add_node("approval", approval)
@@ -275,14 +292,13 @@ def build_graph(checkpointer):
     builder.add_node("handle_error", handle_error)
 
     builder.add_edge(START, "prepare")
-    builder.add_conditional_edges("prepare", route_by_mode, ["retrieve", "agent"])
+    builder.add_edge("prepare", "recall")
+    builder.add_conditional_edges("recall", route_by_mode, ["retrieve", "agent"])
     builder.add_conditional_edges("retrieve", after_retrieve, ["agent", "handle_error"])
     builder.add_conditional_edges("agent", after_agent,
-                                  ["approval", "tools", "summarize", "handle_error", END])
+                                   ["approval", "tools", "summarize", "handle_error", END])
     builder.add_conditional_edges("approval", after_approval, ["tools", "agent"])
     builder.add_edge("tools", "agent")
     builder.add_edge("summarize", END)
     builder.add_edge("handle_error", END)
     return builder.compile(checkpointer=checkpointer)
-
-

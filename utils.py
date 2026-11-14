@@ -331,3 +331,28 @@ def export_pdf(title: str, messages: list[dict], tz_name: str = "UTC") -> bytes:
 def export_backup_json(data: dict) -> bytes:
     return json.dumps(data, indent=2, default=str, ensure_ascii=False).encode("utf-8")
 
+
+def parse_memory_ops(text: str) -> list[dict]:
+    """Parse the model's JSON list of memory operations; anything invalid is dropped."""
+    raw = re.sub(r"^```(?:json)?|```$", "", (text or "").strip(), flags=re.M).strip()
+    start, end = raw.find("["), raw.rfind("]")
+    if start == -1 or end <= start:
+        return []
+    try:
+        data = json.loads(raw[start:end + 1])
+    except json.JSONDecodeError:
+        return []
+    ops: list[dict] = []
+    for item in data if isinstance(data, list) else []:
+        if not isinstance(item, dict):
+            continue
+        kind, fact = item.get("op"), " ".join(str(item.get("text", "")).split())[:200]
+        mem_id = item.get("id")
+        has_id = isinstance(mem_id, int) and not isinstance(mem_id, bool)
+        if kind == "add" and fact:
+            ops.append({"op": "add", "text": fact})
+        elif kind == "update" and has_id and fact:
+            ops.append({"op": "update", "id": mem_id, "text": fact})
+        elif kind == "delete" and has_id:
+            ops.append({"op": "delete", "id": mem_id})
+    return ops

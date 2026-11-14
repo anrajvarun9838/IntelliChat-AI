@@ -77,6 +77,10 @@ class Settings:
     summary_trigger: int      # summarise when the thread has more messages than this
     keep_recent: int          # messages kept verbatim after summarising
     max_context_messages: int  # hard cap on messages sent to the model
+    auto_memory: bool
+    memory_top_k: int
+    memory_min_similarity: float
+    max_memories: int
 
     def missing(self) -> list[str]:
         """Names of required settings that are not configured."""
@@ -121,6 +125,10 @@ def load_settings() -> Settings:
         summary_trigger=_read_int("SUMMARY_TRIGGER", 24),
         keep_recent=_read_int("KEEP_RECENT", 8),
         max_context_messages=_read_int("MAX_CONTEXT_MESSAGES", 30),
+        auto_memory=_read("AUTO_MEMORY", "true").lower() in ("1", "true", "yes", "on"),
+        memory_top_k=_read_int("MEMORY_TOP_K", 5),
+        memory_min_similarity=_read_float("MEMORY_MIN_SIMILARITY", 0.45),
+        max_memories=_read_int("MAX_MEMORIES", 200),
     )
 
 
@@ -148,6 +156,7 @@ LANGUAGES = (
 )
 
 DEFAULT_PREFERENCES: dict = {
+    "model": "",          # empty string means: use settings.chat_model (env / secrets)
     "temperature": 0.5,
     "max_tokens": 8192,
     "response_length": "Balanced",

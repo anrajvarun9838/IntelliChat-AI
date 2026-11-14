@@ -64,7 +64,7 @@ flowchart TD
         PR["prepare<br/>reset per-turn fields"] --> MD{"Mode?"}
         MD -->|document| RT["retrieve<br/>embed question, search pgvector"]
         MD -->|general| AG
-        RT -->|ok| AG["agent<br/>Gemini with tools"]
+        RT -->|ok| AG["agent<br/>Groq with tools"]
         RT -->|error| ER["handle_error"]
         AG --> OUT{"Model output?"}
         OUT -->|empty or blocked| ER
