@@ -1,4 +1,4 @@
-"""Core tests. They never call Gemini or Supabase.
+"""Core tests. They never call Groq, Gemini or Supabase.
 
 Run from the project folder:  python -m pytest -q
 Tests that need an optional package skip themselves if it is not installed.
@@ -70,6 +70,30 @@ def test_friendly_error_messages():
     assert "rate limit" in utils.friendly_error(Exception("429 RESOURCE_EXHAUSTED")).lower()
     assert "free-tier" in utils.friendly_error(Exception("429 quota exceeded, limit: 0"))
     assert "unavailable" in utils.friendly_error(Exception("404 models/foo is not found for API version v1beta")).lower()
+
+
+def test_friendly_error_passes_validation_messages_through():
+    assert utils.friendly_error(ValueError("No readable text found (a scanned PDF needs OCR).")) \
+        == "No readable text found (a scanned PDF needs OCR)."
+    assert "invalid" in utils.friendly_error(Exception("Error code: 401 - invalid_api_key")).lower()
+    assert "unavailable" in utils.friendly_error(Exception("404 model_not_found: The model `x` does not exist")).lower()
+    assert "tool call" in utils.friendly_error(Exception("400 tool_use_failed: Failed to call a function")).lower()
+
+
+def test_parse_memory_ops():
+    fenced = ('```json\n[{"op":"add","text":"User\'s name is Asha"},'
+              '{"op":"update","id":3,"text":"User studies AI"},{"op":"delete","id":4}]\n```')
+    assert utils.parse_memory_ops(fenced) == [
+        {"op": "add", "text": "User's name is Asha"},
+        {"op": "update", "id": 3, "text": "User studies AI"},
+        {"op": "delete", "id": 4},
+    ]
+    assert utils.parse_memory_ops("[]") == [] and utils.parse_memory_ops("not json") == []
+    assert utils.parse_memory_ops('{"op":"add","text":"a"}') == []  # not a list
+    # invalid entries are dropped, valid ones kept
+    messy = '[{"op":"add","text":""},{"op":"update","id":"x","text":"a"},{"op":"delete"},{"op":"drop","id":1},5,{"op":"add","text":"ok"}]'
+    assert utils.parse_memory_ops(messy) == [{"op": "add", "text": "ok"}]
+    assert len(utils.parse_memory_ops('[{"op":"add","text":"' + "x" * 500 + '"}]')[0]["text"]) == 200
 
 
 def test_is_transient():
@@ -144,7 +168,7 @@ def test_export_pdf_is_valid_pdf():
 # RAG helpers
 # ---------------------------------------------------------------------------
 def _import_rag():
-    for name in ("streamlit", "langchain_google_genai", "langchain_text_splitters", "psycopg_pool"):
+    for name in ("streamlit", "langchain_google_genai", "langchain_groq", "langchain_text_splitters", "psycopg_pool"):
         pytest.importorskip(name)
     import rag
     return rag
@@ -204,7 +228,7 @@ def test_format_context_numbers_sources():
 # Tools and graph (mocked model: no API calls)
 # ---------------------------------------------------------------------------
 def _import_graph():
-    for name in ("streamlit", "langchain_google_genai", "langgraph", "psycopg_pool", "httpx"):
+    for name in ("streamlit", "langchain_google_genai", "langchain_groq", "langgraph", "psycopg_pool", "httpx"):
         pytest.importorskip(name)
     import graph
     return graph
@@ -239,10 +263,8 @@ def test_graph_routing_functions():
 
     plain = AIMessage(content="done")
     safe_call = AIMessage(content="", tool_calls=[{"name": "calculator", "args": {"expression": "1+1"}, "id": "1"}])
-    risky_call = AIMessage(content="", tool_calls=[{"name": "save_memory_fact", "args": {"fact": "x"}, "id": "2"}])
     assert graph.after_agent({"messages": [plain]}) == "__end__"
     assert graph.after_agent({"messages": [safe_call]}) == "tools"
-    assert graph.after_agent({"messages": [risky_call]}) == "approval"
     assert graph.after_agent({"messages": [plain], "error": "boom"}) == "handle_error"
 
 
@@ -338,29 +360,3 @@ def test_document_mode_can_also_call_a_tool(monkeypatch):
     assert final["sources"]  # excerpts were retrieved first
     assert any(getattr(m, "name", "") == "calculator" and m.content == "8" for m in final["messages"])
     assert final["messages"][-1].content.endswith("8 May.")
-
-
-def test_agent_pauses_for_approval_and_handles_denial(monkeypatch):
-    graph = _import_graph()
-    from langchain_core.messages import AIMessage, HumanMessage
-    from langgraph.checkpoint.memory import InMemorySaver
-    from langgraph.types import Command
-
-    request = AIMessage(content="", tool_calls=[
-        {"name": "save_memory_fact", "args": {"fact": "likes tea"}, "id": "call-1"}])
-    fake = _fake_model(request, AIMessage(content="Okay, I did not save it."))
-    monkeypatch.setattr(graph, "get_llm", lambda *a, **k: fake)
-    app = graph.build_graph(InMemorySaver())
-    cfg = {"configurable": {"thread_id": "t-approval", "mode": "general", "user_id": "u1"}}
-
-    async def scenario():
-        await app.ainvoke({"messages": [HumanMessage("remember I like tea")]}, cfg)
-        paused = await app.aget_state(cfg)
-        final = await app.ainvoke(Command(resume=False), cfg)
-        return paused, final
-
-    paused, final = asyncio.run(scenario())
-    assert paused.next == ("approval",)
-    assert paused.tasks[0].interrupts[0].value["tools"][0]["name"] == "save_memory_fact"
-    assert final["messages"][-1].content == "Okay, I did not save it."
-    assert any(getattr(m, "name", "") == "save_memory_fact" and "denied" in m.content for m in final["messages"])

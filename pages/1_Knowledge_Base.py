@@ -4,7 +4,7 @@ import streamlit as st
 import chatbot
 import database as db
 import rag
-from auth import init_page
+from auth import init_page, logout
 from config import DOC_EXTENSIONS, settings
 from utils import format_timestamp, friendly_error, shorten
 
@@ -15,6 +15,9 @@ with st.sidebar:
     st.page_link("app.py", label="Chat", icon=":material/chat:")
     st.page_link("pages/1_Knowledge_Base.py", label="Knowledge Base", icon=":material/library_books:")
     st.page_link("pages/2_Settings.py", label="Settings", icon=":material/settings:")
+    st.caption(user["email"])
+    if st.button("Log out", icon=":material/logout:", use_container_width=True, key="kb_logout"):
+        logout()
 
 uid = user["id"]
 tz = st.session_state["prefs"].get("timezone", "UTC")

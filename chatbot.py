@@ -26,7 +26,6 @@ from langchain_core.messages import (
 )
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_groq import ChatGroq
-from langgraph.types import Command
 
 import database as db
 from config import settings
@@ -197,7 +196,7 @@ async def _run_graph(graph, graph_input, config: dict, emit) -> TurnResult:
     async for mode, payload in graph.astream(graph_input, config, stream_mode=["messages", "updates"]):
         if mode == "messages":
             chunk, meta = payload
-            if meta.get("langgraph_node") not in ("respond", "agent") or not isinstance(chunk, AIMessageChunk):
+            if meta.get("langgraph_node") != "agent" or not isinstance(chunk, AIMessageChunk):
                 continue  # ignore summarisation and other internal model calls
             piece = text_of(chunk.content)
             if not piece:
@@ -234,8 +233,8 @@ async def _run_graph(graph, graph_input, config: dict, emit) -> TurnResult:
     return result
 
 
-def start_turn(graph_input: dict | Command, config: dict) -> Job:
-    """Start streaming a graph run. `graph_input` is {"messages": [...]} or Command(resume=...)."""
+def start_turn(graph_input: dict, config: dict) -> Job:
+    """Start streaming a graph run. `graph_input` is {"messages": [...]}."""
     runtime = get_runtime()
 
     async def fn(emit):
@@ -252,28 +251,9 @@ def start_memory_update(user_id: str, user_text: str, assistant_text: str) -> No
     runtime = get_runtime()
     asyncio.run_coroutine_threadsafe(update_memory(user_id, user_text, assistant_text), runtime.loop)
 
-def build_human_message(text: str, images: list[tuple[str, str]] | None = None) -> HumanMessage:
-    """Create the user's message, optionally with images as (mime_type, base64) pairs."""
-    if not images:
-        return HumanMessage(content=text)
-    blocks: list[dict] = [{"type": "text", "text": text or "Describe this image."}]
-    for mime, b64 in images:
-        blocks.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
-    return HumanMessage(content=blocks)
-
-
-def get_pending_approval(config: dict) -> dict | None:
-    """Return the payload of a paused human-approval step, if the thread is waiting for one."""
-    runtime = get_runtime()
-
-    async def fn():
-        state = await runtime.graph.aget_state(config)
-        for task in state.tasks:
-            for interrupt in getattr(task, "interrupts", ()) or ():
-                return interrupt.value
-        return None
-
-    return runtime.run(fn(), timeout=30)
+def build_human_message(text: str) -> HumanMessage:
+    """Create the user's message (text only: the chat model cannot read images)."""
+    return HumanMessage(content=text)
 
 
 def rewind_last_turn(config: dict) -> HumanMessage | None:
@@ -306,5 +286,3 @@ def delete_threads(thread_ids: list[str]) -> None:
             runtime.run(runtime.saver.adelete_thread(thread_id), timeout=30)
         except Exception:  # noqa: BLE001 - leftover checkpoints are harmless
             logger.warning("Could not delete checkpoints for a thread", exc_info=True)
-
-

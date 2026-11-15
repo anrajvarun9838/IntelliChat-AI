@@ -167,4 +167,5 @@ DEFAULT_PREFERENCES: dict = {
 }
 
 DOC_EXTENSIONS = ("pdf", "txt", "docx")
-IMAGE_EXTENSIONS = ("png", "jpg", "jpeg", "webp")
+# The chat model (a Groq text model) cannot read images, so image upload is switched off.
+IMAGE_EXTENSIONS: tuple[str, ...] = ()

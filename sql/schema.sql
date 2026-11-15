@@ -1,10 +1,9 @@
 -- IntelliChat AI database schema for Supabase (PostgreSQL + pgvector).
--- Idempotent: safe to run more than once. Paste into Supabase > SQL Editor > Run,
--- or let the app run it automatically on first start.
+-- Fresh install: paste into Supabase > SQL Editor > Run, or let the app run it on first start.
+-- Safe to run more than once.
 --
--- NOTE: LangGraph's checkpoint tables (checkpoints, checkpoint_blobs,
--- checkpoint_writes, checkpoint_migrations) are created by the app at startup
--- through langgraph-checkpoint-postgres, not by this file.
+-- LangGraph's checkpoint tables (checkpoints, checkpoint_blobs, checkpoint_writes,
+-- checkpoint_migrations) are created by the app at startup, not by this file.
 
 create extension if not exists vector;
 
@@ -23,15 +22,21 @@ create table if not exists public.user_preferences (
     updated_at  timestamptz not null default now()
 );
 
--- Long-term memory: only facts the user explicitly saved or approved.
+-- Long-term memory: short lasting facts about the user, found again by meaning (embedding).
+-- source: 'auto' = picked up by the assistant, 'manual' = added by the user in Settings.
 create table if not exists public.user_memories (
     id          bigint generated always as identity primary key,
     user_id     uuid not null references auth.users(id) on delete cascade,
     content     text not null check (char_length(content) between 1 and 500),
-    created_at  timestamptz not null default now()
+    embedding   vector(768),
+    source      text not null default 'manual',
+    created_at  timestamptz not null default now(),
+    updated_at  timestamptz not null default now()
 );
 create index if not exists user_memories_user_idx
     on public.user_memories (user_id, created_at desc);
+create index if not exists user_memories_embedding_idx
+    on public.user_memories using hnsw (embedding vector_cosine_ops);
 
 -- ---------------------------------------------------------------------------
 -- Conversations and messages (what the user sees in the chat history)
@@ -42,8 +47,7 @@ create table if not exists public.conversations (
     -- LangGraph thread id. Rotated when a conversation is cleared.
     thread_id   uuid not null default gen_random_uuid(),
     title       text not null default 'New chat',
-    mode        text not null default 'general'
-                check (mode in ('general', 'document', 'agent', 'coding', 'study')),
+    mode        text not null default 'general' check (mode in ('general', 'document')),
     created_at  timestamptz not null default now(),
     updated_at  timestamptz not null default now()
 );

@@ -1,4 +1,4 @@
-"""Settings: response options, saved memory, data management, monitoring, workflow view."""
+"""Settings: response options, saved memory, data management and usage."""
 import streamlit as st
 
 import chatbot
@@ -37,7 +37,7 @@ with st.form("prefs_form"):
                       help="Change CHAT_MODEL in your .env / Streamlit Secrets, or add more with CHAT_MODEL_OPTIONS.")
     length = c2.selectbox("Response length", RESPONSE_LENGTHS, index=RESPONSE_LENGTHS.index(prefs["response_length"]))
     temperature = c1.slider("Temperature", 0.0, 2.0, float(prefs["temperature"]), 0.5,
-                            help="Groq recommends leaving Groq models at 0.5; lower values can cause repetition.")
+                            help="Lower values give more focused answers; higher values give more varied answers.")
     max_tokens = c2.slider("Max output tokens", 1024, 16384, int(prefs["max_tokens"]), 1024,
                            help="Includes the model's internal reasoning tokens, so very low values can cut answers short.")
     language = c1.selectbox("Reply language", LANGUAGES,
@@ -65,7 +65,9 @@ st.caption("Theme: open the ⋮ menu (top right) → Settings → Theme to switc
 # Long-term memory
 # --------------------------------------------------------------------------
 st.subheader("Saved memory")
-st.caption("Only facts you add here (or approve in AI Agent mode) are remembered across chats. Nothing is saved automatically.")
+st.caption("Lasting facts about you (name, goals, stable preferences) are picked up automatically from your chats "
+           "when AUTO_MEMORY is on, and used in every conversation. You can also add facts yourself, "
+           "and delete any of them here.")
 with st.form("memory_form", clear_on_submit=True):
     new_fact = st.text_input("Add a fact or preference", max_chars=300,
                              placeholder="e.g. I'm preparing for GATE 2027")
@@ -112,7 +114,7 @@ m3.metric("Tokens out", f"{usage['tokens_out']:,}")
 m4.metric("Avg response time", f"{usage['avg_latency_ms'] / 1000:.1f} s")
 if usage["tools"]:
     st.caption("Tool usage: " + ", ".join(f"{t['tool']} ×{t['uses']}" for t in usage["tools"]))
-st.caption("Token counts appear when Gemini reports them. Detailed traces are available if you set LANGSMITH_API_KEY "
+st.caption("Token counts appear when the model provider reports them. Detailed traces are available if you set LANGSMITH_API_KEY "
            "(note: LangSmith then receives your prompts and answers).")
 
 

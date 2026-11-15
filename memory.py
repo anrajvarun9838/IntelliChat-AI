@@ -55,7 +55,7 @@ async def _embed_facts(texts: list[str]) -> list[list[float]]:
 
 
 async def _backfill_embeddings(user_id: str) -> None:
-    """Embed facts saved without a vector (added in Settings or through the save-memory tool)."""
+    """Embed facts saved without a vector (for example facts added by hand in Settings)."""
     rows = await asyncio.to_thread(db.memories_missing_embedding, user_id, 50)
     if not rows:
         return
@@ -96,7 +96,7 @@ async def update_memory(user_id: str, user_text: str, assistant_text: str) -> No
                   + "\n\nExisting related facts (id: text):\n" + existing
                   + "\n\nNew exchange:\nUser: " + user_text[:2000]
                   + "\nAssistant: " + (assistant_text or "")[:1500])
-        llm = get_llm(settings.chat_model, 0.2, 1024)
+        llm = get_llm(settings.chat_model, 0.2, 2048)  # room for the model's reasoning tokens
         reply = await retry_async(lambda: llm.ainvoke([HumanMessage(content=prompt)]))
         ops = parse_memory_ops(text_of(reply.content))
         if not ops:

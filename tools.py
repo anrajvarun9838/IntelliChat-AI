@@ -1,10 +1,10 @@
-"""LangChain tools available in AI Agent mode.
+"""LangChain tools available in General and Document Chat.
 
 All tools are async or fast, validate their input and return short text. None of
-them executes model-generated code. Optional tools (Wikipedia, weather,
-currency) use free, key-less public APIs and fail with a readable message when
-the service is unreachable. `save_memory_fact` is the only tool that changes
-stored data, so the graph asks the user to approve it first.
+them executes model-generated code, and none of them changes stored data. Optional
+tools (Wikipedia, weather, currency) use free, key-less public APIs and fail with a
+readable message when the service is unreachable. Long-term memory is handled
+separately and automatically (see memory.py).
 """
 from __future__ import annotations
 
@@ -13,19 +13,14 @@ import re
 from datetime import datetime
 
 import httpx
-from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
-import database as db
 from config import settings
 from utils import safe_eval
 
 HTTP_TIMEOUT = 12.0
 HEADERS = {"User-Agent": "IntelliChatAI/1.0 (learning project)"}
 MAX_TOOL_OUTPUT = 4000
-
-# Tools whose execution needs the user's explicit approval (see graph.approval).
-APPROVAL_TOOLS = {"save_memory_fact"}
 
 
 def _clip(text: str) -> str:
@@ -77,9 +72,10 @@ async def web_search(query: str) -> str:
 
             def _search() -> list[dict]:
                 return [{"title": r.get("title", ""), "url": r.get("href", ""), "snippet": r.get("body", "")}
-                        for r in DDGS().text(query, max_results=5)]
+                        for r in DDGS(timeout=10).text(query, max_results=5)]
 
-            results = await asyncio.to_thread(_search)
+            # A hard time limit, so a stuck search can never freeze the whole answer.
+            results = await asyncio.wait_for(asyncio.to_thread(_search), timeout=20)
     except Exception as exc:  # noqa: BLE001 - tool errors go back to the model as text
         return f"Web search is unavailable right now ({type(exc).__name__})."
     if not results:
@@ -170,19 +166,4 @@ async def convert_currency(amount: float, from_currency: str, to_currency: str) 
     return f"{amount} {src} = {amount * rate:,.2f} {dst} (rate {rate}, date {data.get('date')})"
 
 
-@tool
-async def save_memory_fact(fact: str, config: RunnableConfig) -> str:
-    """Save one short fact or preference about the user to their long-term memory.
-    Only call this when the user explicitly asks you to remember something. The user must approve it."""
-    fact = " ".join((fact or "").split())
-    if not fact or len(fact) > 300:
-        return "Provide a fact of 1-300 characters."
-    user_id = (config or {}).get("configurable", {}).get("user_id")
-    if not user_id:
-        return "Cannot save memory: no user context."
-    await asyncio.to_thread(db.add_memory, user_id, fact)
-    return f"Saved to memory: {fact}"
-
-
-TOOLS = [calculator, current_datetime, web_search, wikipedia_search, get_weather,
-         convert_currency, save_memory_fact]
+TOOLS = [calculator, current_datetime, web_search, wikipedia_search, get_weather, convert_currency]

@@ -2,17 +2,16 @@
 import html
 import logging
 import re
+
 import streamlit as st
-from langgraph.types import Command
 
 import chatbot
 import database as db
 import rag
 from auth import init_page, logout
-from config import DOC_EXTENSIONS, IMAGE_EXTENSIONS, MODES, settings
+from config import DOC_EXTENSIONS, MODES, settings
 from utils import (
-    export_pdf, export_txt, file_extension, friendly_error, group_by_date,
-    prepare_image, shorten,
+    export_pdf, export_txt, file_extension, friendly_error, group_by_date, shorten,
 )
 
 logger = logging.getLogger("intellichat.app")
@@ -69,11 +68,13 @@ CHAT_CSS = """
 """
 st.markdown(CHAT_CSS, unsafe_allow_html=True)
 
+
 def cited_sources(content: str, sources: list[dict]) -> list[dict]:
     """Keep only the sources the answer actually cites, like [1] or [2][3] or [1, 3]."""
     numbers = {int(n) for group in re.findall(r"\[([\d,\s]+)\]", content)
                for n in re.findall(r"\d+", group)}
     return [s for s in sources if s["n"] in numbers]
+
 
 def render_user(text: str) -> None:
     """Show the user's message as plain text on the right (HTML-escaped, so it is safe)."""
@@ -105,18 +106,19 @@ def delete_chat(conversation_id: str) -> None:
     rag.storage_remove(removed["storage_paths"])
     if ss.conv_id == conversation_id:
         ss.conv_id = None
-    ss.pop("pending_approval", None)
 
 
 def make_config(conversation: dict, mode: str, doc_ids: list[str]) -> dict:
     """LangGraph run config: thread id for memory plus per-turn settings."""
+    saved_model = prefs.get("model")
+    model = saved_model if saved_model in settings.model_options else settings.chat_model  # ignore stale names
     return {
         "configurable": {
             "thread_id": conversation["thread_id"],
             "user_id": uid,
             "conversation_id": conversation["id"],
             "mode": mode,
-            "model": prefs.get("model") or settings.chat_model,
+            "model": model,
             "temperature": prefs["temperature"],
             "max_tokens": prefs["max_tokens"],
             "language": prefs["language"],
@@ -150,7 +152,7 @@ def ingest_attachments(conversation_id: str, files) -> None:
         st.toast(f"{result.filename}: {result.message}", icon=icon)
 
 
-def run_turn(conversation, mode, graph_input, config, user_text: str | None = None) -> None:
+def run_turn(conversation: dict, mode: str, graph_input, config: dict, user_text: str | None = None) -> None:
     """Stream one assistant answer, save it, then rerun to show the final layout."""
     cid = conversation["id"]
     job = chatbot.start_turn(graph_input, config)
@@ -192,9 +194,7 @@ def run_turn(conversation, mode, graph_input, config, user_text: str | None = No
                            tokens_out=result.tokens_out or None, latency_ms=result.latency_ms)
             if user_text:  # background memory update; it does not delay the UI
                 chatbot.start_memory_update(uid, user_text, result.text)
-        pending = chatbot.get_pending_approval(config)
-        ss.pending_approval = {"conversation_id": cid, "payload": pending} if pending else None
-        if not result.text.strip() and not result.error and not pending:
+        else:
             ss.last_error = "The model returned no text. Please try again."
     st.rerun()
 
@@ -206,7 +206,6 @@ with st.sidebar:
     st.title("IntelliChat AI")
     if st.button("New chat", icon=":material/add:", use_container_width=True, type="primary"):
         ss.conv_id = None
-        ss.pop("pending_approval", None)
         st.rerun()
     search = st.text_input("Search", placeholder="Search conversations", label_visibility="collapsed")
 
@@ -220,7 +219,6 @@ with st.sidebar:
             if row[0].button(shorten(conv["title"], 28), key=f"open_{conv['id']}", use_container_width=True,
                              type="primary" if conv["id"] == ss.conv_id else "secondary"):
                 ss.conv_id = conv["id"]
-                ss.pop("pending_approval", None)
                 st.rerun()
             with row[1].popover("⋯"):
                 new_title = st.text_input("Rename", value=conv["title"], key=f"rename_{conv['id']}")
@@ -237,7 +235,6 @@ with st.sidebar:
         old_thread = db.clear_conversation(uid, ss.conv_id)
         if old_thread:
             chatbot.delete_threads([old_thread])
-        ss.pop("pending_approval", None)
         st.rerun()
     st.page_link("pages/1_Knowledge_Base.py", label="Knowledge Base", icon=":material/library_books:")
     st.page_link("pages/2_Settings.py", label="Settings", icon=":material/settings:")
@@ -253,8 +250,6 @@ if ss.conv_id and conversation is None:  # deleted elsewhere
     ss.conv_id = None
 messages = db.list_messages(uid, conversation["id"]) if conversation else []
 current_mode = conversation["mode"] if conversation else ss.new_mode
-if current_mode not in MODES:
-    current_mode = "general"  # chats saved earlier with a mode that no longer exists
 
 # ---------------------------------------------------------------------------
 # Header: mode
@@ -284,21 +279,6 @@ if mode == "document":
                 "or add them on the Knowledge Base page.")
 
 # ---------------------------------------------------------------------------
-# Approval check (when returning to a chat that is waiting for a decision)
-# ---------------------------------------------------------------------------
-if conversation and ss.get("approval_checked") != conversation["id"]:
-    try:
-        pending = chatbot.get_pending_approval(make_config(conversation, mode, doc_ids))
-    except Exception:  # noqa: BLE001 - not critical for rendering
-        logger.warning("Could not check pending approval", exc_info=True)
-        pending = None
-    ss.pending_approval = {"conversation_id": conversation["id"], "payload": pending} if pending else None
-    ss.approval_checked = conversation["id"]
-pending_approval = ss.get("pending_approval")
-if pending_approval and (not conversation or pending_approval["conversation_id"] != conversation["id"]):
-    pending_approval = None
-
-# ---------------------------------------------------------------------------
 # Message history
 # ---------------------------------------------------------------------------
 welcome = st.empty()  # placeholder, so the message can vanish the moment a chat starts
@@ -325,7 +305,7 @@ for m in messages:
             st.code(m["content"], language="markdown", wrap_lines=True)  # click the copy icon on the code box
             st.download_button("Download .md", m["content"], file_name=f"response-{m['id']}.md",
                                mime="text/markdown", key=f"dl_{m['id']}")
-        if m["id"] == last_assistant_id and not pending_approval and not ss.generating:
+        if m["id"] == last_assistant_id and not ss.generating:
             if actions[1].button(" ", icon=":material/refresh:", help="Regenerate", key=f"regen_{m['id']}"):
                 ss.regenerate = True
                 ss.generating = True
@@ -345,31 +325,13 @@ if ss.get("last_error"):
     st.error(ss.pop("last_error"))
 
 # ---------------------------------------------------------------------------
-# Human approval card
-# ---------------------------------------------------------------------------
-if pending_approval:
-    with st.chat_message("assistant"):
-        st.warning("**Approval needed.** The assistant wants to perform this action:")
-        for tool in pending_approval["payload"].get("tools", []):
-            st.code(f"{tool['name']}({tool['args']})", language="python")
-        approve_col, deny_col, _ = st.columns([1, 1, 4])
-        if approve_col.button("Approve", type="primary", key="approve_btn"):
-            ss.approval_decision = True
-            ss.generating = True
-            st.rerun()
-        if deny_col.button("Deny", key="deny_btn"):
-            ss.approval_decision = False
-            ss.generating = True
-            st.rerun()
-
-# ---------------------------------------------------------------------------
 # Input handling
 # ---------------------------------------------------------------------------
 generating = ss.generating
 submitted = st.chat_input(
     "Ask IntelliChat AI… ",
-    accept_file="multiple", file_type=list(DOC_EXTENSIONS + IMAGE_EXTENSIONS),
-    disabled=bool(pending_approval) or generating)  # locked while an answer is being generated
+    accept_file="multiple", file_type=list(DOC_EXTENSIONS),
+    disabled=generating)  # locked while an answer is being generated
 
 if submitted and not generating:
     # remember the message and rerun, so the next run shows the input locked
@@ -382,20 +344,12 @@ if generating:
     queued = ss.pop("queued", None)
     if queued:
         text, files = queued["text"], queued["files"]
-elif ss.get("pending_prompt"):
-        # NOTE: pending_prompt is reserved for future use; currently nothing sets it.
-        pass
 
 if text or files:
     welcome.empty()  # hide the welcome message as soon as a message is sent
 
 try:
-    if ss.get("approval_decision") is not None and conversation:
-        decision = ss.pop("approval_decision")
-        ss.pending_approval = None
-        run_turn(conversation, mode, Command(resume=decision), make_config(conversation, mode, doc_ids), user_text=text)
-
-    elif ss.pop("regenerate", False) and conversation and messages:
+    if ss.pop("regenerate", False) and conversation and messages:
         last_user = next((m for m in reversed(messages) if m["role"] == "user"), None)
         if last_user:
             cfg = make_config(conversation, mode, doc_ids)
@@ -408,7 +362,6 @@ try:
             conversation = db.create_conversation(uid, shorten(text, 50) if text else "New chat", mode)
             ss.conv_id = conversation["id"]
         doc_files = [f for f in files if file_extension(f.name) in DOC_EXTENSIONS]
-        image_files = [f for f in files if file_extension(f.name) in IMAGE_EXTENSIONS]
 
         if doc_files:
             ingest_attachments(conversation["id"], doc_files)
@@ -418,13 +371,12 @@ try:
                 ss.mode_rev += 1
                 st.toast("Switched to Document Chat so you can ask about the attached files.", icon="📄")
 
-        if text or image_files:
-            images = [prepare_image(f.getvalue()) for f in image_files]
-            shown = text + "".join(f"\n\n📎 *Image: {f.name}*" for f in image_files)
-            db.add_message(uid, conversation["id"], "user", shown or text, mode=mode)
-            render_user(shown)
-            human = chatbot.build_human_message(text, images)
-            run_turn(conversation, mode, {"messages": [human]}, make_config(conversation, mode, doc_ids))
+        if text:
+            db.add_message(uid, conversation["id"], "user", text, mode=mode)
+            render_user(text)
+            human = chatbot.build_human_message(text)
+            run_turn(conversation, mode, {"messages": [human]}, make_config(conversation, mode, doc_ids),
+                     user_text=text)
         else:
             st.rerun()
 except PermissionError:

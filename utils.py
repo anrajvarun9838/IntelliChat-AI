@@ -39,8 +39,8 @@ def setup_logging() -> None:
 def text_of(content: Any) -> str:
     """Return only the text of a LangChain message `content`.
 
-    Groq can return a plain string or a list of content blocks (text,
-    thinking, images...). Only text blocks are user-visible.
+    A model can return a plain string or a list of content blocks (text,
+    thinking, ...). Only text blocks are user-visible.
     """
     if content is None:
         return ""
@@ -62,26 +62,32 @@ def text_of(content: Any) -> str:
 # ---------------------------------------------------------------------------
 def friendly_error(exc: BaseException) -> str:
     """Translate provider/database exceptions into a short, actionable message."""
+    if isinstance(exc, ValueError):  # our own readable validation messages (e.g. "No readable text found")
+        return str(exc)[:300]
     raw = f"{type(exc).__name__}: {exc}"
     low = raw.lower()
-    if "api key not valid" in low or "api_key_invalid" in low or "invalid api key" in low:
-        return "The Groq API key is invalid. Check GROQ_API_KEY in your .env file or Streamlit Secrets."
-    if "permission_denied" in low or ("403" in low and "groq" in low):
-        return "The Groq API rejected the request (permission denied). Check that the key's project has the Groq API enabled."
+    if "api key not valid" in low or "api_key_invalid" in low or "invalid api key" in low or "invalid_api_key" in low:
+        return ("An API key is invalid. Check GROQ_API_KEY (chat) and GEMINI_API_KEY (document search) "
+                "in your .env file or Streamlit Secrets.")
+    if "permission_denied" in low or "403" in low:
+        return "The AI provider rejected the request (permission denied). Check that your API key is allowed to use this model."
     if "limit: 0" in low:
-        return ("This model has no free-tier quota for your project. Pick another model in "
-                "Settings, or enable billing in Google AI Studio.")
-    if "429" in low or "resource_exhausted" in low or "quota" in low or "rate limit" in low:
-        return ("Groq rate limit or quota reached. Wait a minute and try again; "
+        return ("This model has no free-tier quota for your project. Pick another model, "
+                "or enable billing with the provider.")
+    if "429" in low or "resource_exhausted" in low or "quota" in low or "rate limit" in low or "rate_limit" in low:
+        return ("Rate limit or quota reached. Wait a minute and try again; "
                 "if it keeps happening your daily free-tier quota may be used up.")
-    if ("404" in low and "model" in low) or "is not found for api version" in low or "is not supported for" in low:
-        return "The selected Groq model is unavailable. Change CHAT_MODEL (or the model in Settings) to a currently supported ID."
+    if (("404" in low and "model" in low) or "model_not_found" in low
+            or "is not found for api version" in low or "is not supported for" in low):
+        return "The selected model is unavailable. Change CHAT_MODEL to a currently supported model ID."
+    if "tool_use_failed" in low or "failed to call a function" in low:
+        return "The model produced an invalid tool call. Please rephrase your request and try again."
     if "503" in low or "unavailable" in low or "overloaded" in low:
-        return "Groq is temporarily overloaded. Please try again in a moment."
+        return "The AI provider is temporarily overloaded. Please try again in a moment."
     if "timeout" in low or "timed out" in low:
         return "The request timed out. Please try again."
     if "graphrecursionerror" in low or "recursion limit" in low:
-        return "The agent used too many tool steps without finishing. Try a simpler or more specific request."
+        return "The assistant used too many tool steps without finishing. Try a simpler or more specific request."
     if "psycopg" in low or "operationalerror" in low or ("connection" in low and "database" in low):
         return "Could not reach the database. Check DATABASE_URL and your Supabase project status."
     if "safety" in low or "blocked" in low:

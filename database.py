@@ -36,7 +36,7 @@ def get_pool() -> ConnectionPool:
         max_size=settings.db_pool_size,
         # prepare_threshold=None disables server-side prepared statements, which
         # Supabase's pooled connections do not support.
-        kwargs={"row_factory": dict_row, "prepare_threshold": None},
+        kwargs={"row_factory": dict_row, "prepare_threshold": None, "connect_timeout": 10},
         open=False,
     )
     pool.open(wait=True, timeout=30)
@@ -65,36 +65,14 @@ def _clean_all(rows: Sequence[dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Schema bootstrap
 # ---------------------------------------------------------------------------
-MEMORY_MIGRATION = """
-alter table public.user_memories add column if not exists embedding vector(768);
-alter table public.user_memories add column if not exists source text not null default 'manual';
-alter table public.user_memories add column if not exists updated_at timestamptz not null default now();
-"""
-
-# Sentinel row tracked in a small helper table so MEMORY_MIGRATION only runs once.
-_MIGRATION_FLAG_SQL = """
-create table if not exists public._schema_migrations (
-    name text primary key,
-    applied_at timestamptz not null default now()
-);
-"""
-
-
 def ensure_schema() -> None:
-    """Run sql/schema.sql if the app tables do not exist yet, then add any newer columns
-    (MEMORY_MIGRATION). The migration is tracked in _schema_migrations so it only runs
-    once per database, not on every server restart."""
+    """Run sql/schema.sql if the app tables do not exist yet."""
     with cursor() as cur:
-        cur.execute(_MIGRATION_FLAG_SQL)
         cur.execute("select to_regclass('public.document_chunks') as t")
-        if cur.fetchone()["t"] is None:
-            cur.execute(SCHEMA_PATH.read_text(encoding="utf-8"))
-        # Only run MEMORY_MIGRATION if it has not been recorded yet.
-        cur.execute("select 1 from public._schema_migrations where name = 'memory_v1'")
-        if cur.fetchone() is None:
-            cur.execute(MEMORY_MIGRATION)
-            cur.execute("insert into public._schema_migrations (name) values ('memory_v1') "
-                        "on conflict do nothing")
+        if cur.fetchone()["t"] is not None:
+            return
+        cur.execute(SCHEMA_PATH.read_text(encoding="utf-8"))
+
 
 def lock_down_checkpoint_tables() -> None:
     """Enable RLS (with no policies) on LangGraph's tables so the public API cannot read them."""
@@ -133,7 +111,7 @@ def save_preferences(user_id: str, prefs: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Long-term memory (explicitly saved facts only)
+# Long-term memory (short facts about the user, searched by meaning)
 # ---------------------------------------------------------------------------
 def list_memories(user_id: str) -> list[dict]:
     with cursor() as cur:
@@ -329,7 +307,8 @@ def add_message(user_id: str, conversation_id: str, role: str, content: str, *,
         row = cur.fetchone()
         if row is None:
             raise PermissionError("Conversation not found for this user.")
-        cur.execute("update conversations set updated_at = now() where id = %s", (conversation_id,))
+        cur.execute("update conversations set updated_at = now() where id = %s and user_id = %s",
+                    (conversation_id, user_id))
         return _clean(row)  # type: ignore[return-value]
 
 
@@ -489,7 +468,8 @@ def export_all(user_id: str) -> dict:
         by_conv: dict[str, list] = {}
         for m in cur.fetchall():
             by_conv.setdefault(str(m.pop("conversation_id")), []).append(m)
-        cur.execute("select content, created_at from user_memories where user_id = %s", (user_id,))
+        cur.execute("select content, source, created_at, updated_at from user_memories "
+                    "where user_id = %s order by created_at", (user_id,))
         memories = cur.fetchall()
         cur.execute("select filename, size_bytes, created_at from documents where user_id = %s", (user_id,))
         documents = cur.fetchall()
