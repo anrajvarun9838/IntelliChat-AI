@@ -1,5 +1,7 @@
 # IntelliChat AI
 
+## Live Demo -> https://intellichat-ai.streamlit.app/
+
 **An AI assistant that chats, reads your documents, uses tools and remembers you.**
 
 IntelliChat AI is built with Streamlit, LangChain and LangGraph. The chat model runs on Groq, document search uses Google Gemini embeddings, and Supabase (PostgreSQL, pgvector, Storage and Auth) is the backend.
