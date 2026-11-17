@@ -78,36 +78,8 @@ flowchart LR
     TL --> EXT["Public web APIs<br/>search, Wikipedia, weather, currency"]
 ```
 
-### 2. Life of one message
 
-```mermaid
-sequenceDiagram
-    actor U as User
-    participant UI as app.py (Streamlit)
-    participant J as Job (chatbot.py)
-    participant G as LangGraph (background loop)
-    participant M as Groq model
-    participant D as Supabase PostgreSQL
-
-    U->>UI: types a message
-    UI->>UI: lock the input, show Stop button
-    UI->>D: save the user message
-    UI->>J: start_turn(message, config)
-    J->>G: run graph on the background loop
-    G->>D: load checkpoint (thread id) and relevant saved facts
-    G->>M: prompt + history + memory (+ document excerpts, tools)
-    M-->>G: streamed tokens or tool requests
-    G-->>J: events (text, status, tools used)
-    J-->>UI: queue of events
-    UI-->>U: answer streams in
-    G->>D: save checkpoint
-    UI->>D: save assistant message, tokens, response time
-    UI->>UI: unlock the input
-    UI-)J: start memory update in the background
-    J-)M: merge new facts into saved memory
-```
-
-### 3. LangGraph workflow
+### 2. LangGraph workflow
 
 ```mermaid
 flowchart TD
@@ -139,7 +111,7 @@ flowchart TD
 - **handle_error** is the exit for expected failures (empty or blocked output, failed retrieval).
 - State is saved to PostgreSQL after every step, keyed by the conversation's thread id.
 
-### 4. Long-term memory
+### 3. Long-term memory
 
 ```mermaid
 flowchart LR
@@ -155,30 +127,8 @@ flowchart LR
 
 Facts are short sentences about you. The update step is told not to store temporary requests, secrets, ID or card numbers, or sensitive details, but a model can make mistakes, so check **Settings → Saved memory** now and then and delete anything you do not want kept. Set `AUTO_MEMORY=false` to turn the automatic update off (saved facts are still used).
 
-### 5. Document pipeline
 
-```mermaid
-flowchart TD
-    UP["Upload PDF / TXT / DOCX<br/>(Knowledge Base page or chat box)"] --> CK["SHA-256 checksum"]
-    CK --> DUP{"Already uploaded?"}
-    DUP -->|yes| SK["Skip: duplicate"]
-    DUP -->|no| REC["Create document record<br/>status: processing"]
-    REC --> PAR{"run in parallel"}
-    PAR --> ST["Upload original file<br/>to Supabase Storage"]
-    PAR --> EX["Extract text<br/>(page numbers for PDFs)"]
-    EX --> CH["Split into overlapping chunks"]
-    CH --> EM["Embed in batches<br/>Gemini, limited concurrency, retries"]
-    ST --> JOIN["Both finished"]
-    EM --> JOIN
-    JOIN --> INS["Batch-insert chunks and vectors<br/>into pgvector"]
-    INS --> OK["status: ready"]
-    EX -->|no text, error| FAIL["Roll back record and file<br/>show the error"]
-    EM -->|error| FAIL
-```
-
-Several files are processed at the same time (limited by `DOC_CONCURRENCY`); one failed file never discards the others. Files attached inside a chat belong to that chat and are deleted with it. Files added on the Knowledge Base page are available in every chat.
-
-### 6. Async design
+### 4. Async design
 
 Streamlit scripts are synchronous and re-run on every click. To avoid repeated `asyncio.run()` calls, the app starts **one background thread with one event loop** (created once with `st.cache_resource`). The LangGraph graph and the async PostgreSQL checkpointer live there. The Streamlit script starts a `Job` and reads streamed events from a thread-safe queue, so tokens appear live while nothing blocks the UI. On Windows the loop is a selector loop because psycopg's async mode does not work with the default Proactor loop.
 
@@ -277,55 +227,5 @@ Open http://localhost:8501, sign up, and start chatting. Stop the app with `Ctrl
 
 Never commit `.env` or `.streamlit/secrets.toml`, and never share them: `.gitignore` already excludes both.
 
-## Deploy to Streamlit Community Cloud
 
-1. Push the project to GitHub (check that `.env` and `.streamlit/secrets.toml` are not in the repository).
-2. On https://share.streamlit.io choose **New app**, pick the repository, branch `main`, main file `app.py`.
-3. In **Advanced settings → Secrets**, paste the same values as TOML with quotes:
-   ```toml
-   GROQ_API_KEY = "..."
-   CHAT_MODEL = "openai/gpt-oss-20b"
-   GEMINI_API_KEY = "..."
-   DATABASE_URL = "postgresql://postgres.xxxx:PASSWORD@aws-0-REGION.pooler.supabase.com:5432/postgres"
-   SUPABASE_URL = "https://xxxx.supabase.co"
-   SUPABASE_ANON_KEY = "..."
-   SUPABASE_SERVICE_KEY = "..."
-   ```
-4. Deploy, then set the Site URL under Supabase **Authentication → URL Configuration**.
 
-Things to know after deploying: every visitor shares your Groq and Gemini quota, and anyone can sign up unless you disable sign-ups in Supabase. A free Supabase project pauses after a week without activity; restore it from the dashboard.
-
-## Troubleshooting
-
-- **A setup screen lists names**: those settings are missing.
-- **`PoolTimeout` / cannot reach the database**: use the Session pooler URL, check the password (URL-encode special characters), make sure the project is not paused, and restart the app cleanly instead of relying on hot reload.
-- **"Email not confirmed"**: confirm the email, or turn off email confirmation in Supabase.
-- **429 or quota errors**: wait a minute. `limit: 0` means the model has no free quota for your project.
-- **`model_not_found`**: `CHAT_MODEL` must be a Groq model ID that your key can use, with no spaces or quotes.
-- **"No readable text found"**: the PDF is a scan (images only). Use a text PDF or run OCR first.
-- **Document Chat finds nothing**: lower `MIN_SIMILARITY` or select the document in the "Search in" box.
-- **Memory does not recall a fact**: lower `MEMORY_MIN_SIMILARITY`, or check Settings → Saved memory.
-- **Very slow answers**: check the terminal logs (`graph node finished`, `turn finished`) to see which step is slow.
-
-## Limitations
-
-- The chat model is text-only, so images cannot be attached.
-- Login is kept only for the life of the browser session; a page reload asks you to log in again. There is no password-reset screen.
-- Scanned PDFs are not supported (no OCR). PDF export of chats only renders Latin text; use TXT for other scripts.
-- Long-term memory is written by a model and can occasionally store something wrong; review it in Settings.
-- The embedding size (768) is fixed in `sql/schema.sql` and `config.py`.
-- Light/dark theme uses Streamlit's own menu (⋮ → Settings → Theme).
-
-## Manual test checklist
-
-1. Sign up, log in, log out.
-2. Send a message, restart the app, reopen the chat.
-3. Rename, delete, search and clear a conversation.
-4. Press Stop during a long answer; confirm the input is locked while generating; press Regenerate.
-5. Upload a PDF, a TXT and a DOCX together; re-upload one (should say duplicate).
-6. Document Chat: ask something in the file, then something unrelated (should say it was not found).
-7. Ask a document question that also needs the date or the web.
-8. General Chat: arithmetic, weather, currency, a web search, and a coding question.
-9. Tell the assistant your name, open a new chat and ask "what is my name?". Check it under Settings → Saved memory.
-10. A 30-message chat keeps working (summarising); follow-ups still use earlier context.
-11. Two accounts cannot see each other's chats, documents or memory.
